@@ -1,7 +1,26 @@
 import asyncio
 import os
 
-from beeai_framework.agents.requirement import RequirementAgent
+## Observability
+from openinference.instrumentation.beeai import BeeAIInstrumentor
+from opentelemetry import trace as trace_api
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk import trace as trace_sdk
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+
+def setup_observability() -> None:
+    resource = Resource(attributes={})
+    tracer_provider = trace_sdk.TracerProvider(resource=resource)
+    tracer_provider.add_span_processor(SimpleSpanProcessor(OTLPSpanExporter()))
+    trace_api.set_tracer_provider(tracer_provider)
+
+    BeeAIInstrumentor().instrument()
+# setup_observability()
+## Observability
+
+
+from beeai_framework.agents.experimental import RequirementAgent
 from beeai_framework.backend import ChatModel
 from beeai_framework.backend.document_loader import DocumentLoader
 from beeai_framework.backend.embedding import EmbeddingModel
@@ -13,16 +32,19 @@ from beeai_framework.tools import Tool
 from beeai_framework.tools.search.retrieval import VectorStoreSearchTool
 
 POPULATE_VECTOR_DB = True
-VECTOR_DB_PATH_4_DUMP = ""  # Set this path for persistency
+VECTOR_DB_PATH_4_DUMP = "/Users/antonp/code/tmp/vector.db"  # Set this path for persistency
 
 
 async def setup_vector_store() -> VectorStore | None:
     """
     Setup vector store with BeeAI framework documentation.
     """
-    embedding_model = EmbeddingModel.from_name("watsonx:ibm/slate-125m-english-rtrvr-v2", truncate_input_tokens=500)
-
+    # Use Ollama embedding model (change to watsonx if you have credentials)
+    embedding_model = EmbeddingModel.from_name("ollama:nomic-embed-text")
+    # embedding_model = EmbeddingModel.from_name("watsonx:ibm/slate-125m-english-rtrvr-v2", truncate_input_tokens=500)
+    
     # Load existing vector store if available
+    
     if VECTOR_DB_PATH_4_DUMP and os.path.exists(VECTOR_DB_PATH_4_DUMP):
         print(f"Loading vector store from: {VECTOR_DB_PATH_4_DUMP}")
         from beeai_framework.adapters.beeai.backend.vector_store import TemporalVectorStore
