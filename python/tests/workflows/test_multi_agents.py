@@ -25,7 +25,7 @@ async def test_multi_agents_workflow_basic() -> None:
     await memory.add(UserMessage(content="Translate 'Hello' to German."))
     response = await workflow.run(memory.messages)
     print(response.state)
-    assert response.state.final_answer != ""
+    assert "hallo" in response.state.final_answer.lower()
 
 
 @pytest.mark.e2e
@@ -41,7 +41,7 @@ async def test_multi_agents_workflow_creation() -> None:
     memory = UnconstrainedMemory()
     await memory.add(UserMessage(content="Translate 'Good morning' to Italian."))
     response = await workflow.run(memory.messages)
-    assert response.state.final_answer != ""
+    assert "buongiorno" in response.state.final_answer.lower().replace(" ", "")
 
 
 @pytest.mark.e2e

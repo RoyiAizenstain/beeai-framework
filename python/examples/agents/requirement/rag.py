@@ -1,30 +1,7 @@
 import asyncio
 import os
 
-<<<<<<< HEAD:python/examples/agents/experimental/requirement/rag.py
-## Observability
-from openinference.instrumentation.beeai import BeeAIInstrumentor
-from opentelemetry import trace as trace_api
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk import trace as trace_sdk
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-
-def setup_observability() -> None:
-    resource = Resource(attributes={})
-    tracer_provider = trace_sdk.TracerProvider(resource=resource)
-    tracer_provider.add_span_processor(SimpleSpanProcessor(OTLPSpanExporter()))
-    trace_api.set_tracer_provider(tracer_provider)
-
-    BeeAIInstrumentor().instrument()
-# setup_observability()
-## Observability
-
-
-from beeai_framework.agents.experimental import RequirementAgent
-=======
 from beeai_framework.agents.requirement import RequirementAgent
->>>>>>> main:python/examples/agents/requirement/rag.py
 from beeai_framework.backend import ChatModel
 from beeai_framework.backend.document_loader import DocumentLoader
 from beeai_framework.backend.embedding import EmbeddingModel

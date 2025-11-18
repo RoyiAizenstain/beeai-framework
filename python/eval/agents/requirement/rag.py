@@ -23,13 +23,14 @@ from beeai_framework.agents.experimental import RequirementAgent
 from beeai_framework.backend import ChatModel, ToolMessage
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.tools.search.retrieval import VectorStoreSearchTool
-from eval.model import DeepEvalLLM
+
 
 
 async def create_agent() -> RequirementAgent:
     """
     Create a RequirementAgent with RAG capabilities using VectorStoreSearchTool.
     """
+  
     # Setup vector store using the reusable function from examples
     vector_store = await setup_vector_store()
     if vector_store is None:
