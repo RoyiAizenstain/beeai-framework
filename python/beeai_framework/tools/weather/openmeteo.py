@@ -59,13 +59,7 @@ class OpenMeteoTool(Tool[OpenMeteoToolInput, ToolRunOptions, JSONToolOutput[dict
     async def _geocode(self, input: OpenMeteoToolInput) -> dict[str, str]:
         params = {"format": "json", "count": 1}
         if input.location_name:
-            if not input.country:
-                name, *parts = input.location_name.split(",")
-                params["name"] = name.strip()
-                if parts:
-                    params["country"] = ",".join(parts).strip()
-            else:
-                params["name"] = input.location_name.strip()
+            params["name"] = input.location_name
         if input.country:
             params["country"] = input.country
 
