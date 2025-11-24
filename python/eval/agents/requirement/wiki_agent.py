@@ -35,6 +35,44 @@ from beeai_framework.tools.code import PythonTool, LocalPythonStorage
 from eval.model import DeepEvalLLM
 
 
+from collections import Counter
+
+def count_tool_usage(messages):
+    """
+    Count how many times each tool was used.
+   
+    Args:
+        messages: list of AnyMessage objects from response.memory.messages
+
+    Returns:
+        dict: { tool_name: count }
+    """
+    tool_counter = Counter()
+
+    for msg in messages:
+        # Check if this message is a ToolMessage
+        if isinstance(msg, ToolMessage):
+            # Tool name appears directly on msg.tool_name OR inside msg.content
+            tool_name = getattr(msg, "tool_name", None)
+
+            # Some BeeAI versions store tool_name inside msg.content.tool_name
+            if tool_name is None:
+                content = getattr(msg, "content", None)
+                tool_name = getattr(content, "tool_name", None)
+
+            # Count only valid tool names
+            if tool_name:
+                tool_counter[tool_name] += 1
+
+    return dict(tool_counter)
+
+
+
+
+
+
+
+
 def create_calculator_tool() -> Tool:
     """
     Create a PythonTool configured for mathematical calculations.
@@ -164,10 +202,16 @@ async def create_rag_test_cases():
         response = await agent.run(question)
         
         #actual_output = response.result.text + extract_tool_usage_and_facts_trace(response.memory.messages)
-        actual_output = response.result.text
+        #actual_output = response.result.text
 
         # Extract retrieval context from message history
         retrieval_context = extract_retrieval_context(response.memory.messages)
+
+        tool_usage = count_tool_usage(response.memory.messages)
+
+        actual_output = [response.result.text, tool_usage]
+        
+
         
         # Create test case
         test_case = LLMTestCase(
