@@ -1,10 +1,6 @@
 import asyncio
 import os
 
-<<<<<<< HEAD:python/examples/agents/requirement/rag.py
-<<<<<<< HEAD:python/examples/agents/experimental/requirement/rag.py
-=======
->>>>>>> 8fbde2de4d75fb4cb9cac659704eeedb27e940ff:python/examples/agents/experimental/requirement/rag.py
 ## Observability
 
 from openinference.instrumentation.beeai import BeeAIInstrumentor
@@ -26,12 +22,10 @@ def setup_observability() -> None:
 
 
 from beeai_framework.agents.experimental import RequirementAgent
-<<<<<<< HEAD:python/examples/agents/requirement/rag.py
-=======
-from beeai_framework.agents.requirement import RequirementAgent
->>>>>>> main:python/examples/agents/requirement/rag.py
-=======
->>>>>>> 8fbde2de4d75fb4cb9cac659704eeedb27e940ff:python/examples/agents/experimental/requirement/rag.py
+
+from beeai_framework.agents.experimental.agent import RequirementAgent
+
+
 from beeai_framework.backend import ChatModel
 from beeai_framework.backend.document_loader import DocumentLoader
 from beeai_framework.backend.embedding import EmbeddingModel

@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from typing import List
 
+from eval.model import DeepEvalLLM
 import pytest
 from deepeval import evaluate
 from deepeval.metrics import ContextualPrecisionMetric, ContextualRecallMetric, ContextualRelevancyMetric, AnswerRelevancyMetric

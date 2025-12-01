@@ -5,7 +5,7 @@ from pathlib import Path
 import asyncio
 import traceback
 import tempfile
-from typing import List
+from typing import Counter, List
 from beeai_framework.tools.tool import Tool
 import pytest
 from deepeval import evaluate
@@ -13,11 +13,14 @@ from deepeval.metrics import (
     FaithfulnessMetric,
     AnswerRelevancyMetric,
     ContextualRecallMetric,
-    
 )
+
 from deepeval.test_case import LLMTestCase
 from dotenv import load_dotenv
 
+from AnswerLLMJudgeMetric import AnswerLLMJudgeMetric
+from ToolUsageMetric import ToolUsageMetric
+from FactsSimilarityMetric import FactsSimilarityMetric
 load_dotenv()
 
 # Add the examples directory to sys.path to import setup_vector_store
@@ -41,6 +44,22 @@ from beeai_framework.tools.code import PythonTool, LocalPythonStorage
 from eval.model import DeepEvalLLM
 from deepeval.metrics import GEval
 from deepeval.test_case import LLMTestCaseParams
+from deepeval.test_case import LLMTestCase, ToolCall
+from deepeval.metrics import ToolCorrectnessMetric, ArgumentCorrectnessMetric
+
+import pandas as pd
+
+def count_tool_usage(messages):
+    tool_counter = Counter()
+
+    for msg in messages:
+        if isinstance(msg, ToolMessage):
+            for item in msg.content:
+                tool_name = getattr(item, "tool_name", None)
+                if tool_name and tool_name != "final_answer":
+                    tool_counter[tool_name] += 1
+
+    return dict(tool_counter)
 
 def create_calculator_tool() -> Tool:
     """
@@ -89,19 +108,19 @@ async def create_agent() -> RequirementAgent:
     #
     JSON_SCHEMA_STRING = """{"final_answer": "...","tool_used": "...","supporting_sentences": ["<sentence 1>", "<sentence 2>"],"reasoning_explanation": [{"step": 1, "logic": "The reasoning step"}]}"""
     JSON_SCHEMA_STRING = """{"final_answer": "...","tool_used": [{"tool": "...", "times_used": }]},"supporting_sentences": ["<sentence 1>", "<sentence 2>"],"reasoning_explanation": [{"step": 1, "logic": "The reasoning step"}]}"""
-
+    JSON_SCHEMA_STRING = """{"final_answer": "...","tool_used": "...","supporting_sentences": ["<sentence 1>", "<sentence 2>"],"reasoning_explanation": [{"step": 1, "logic": "The reasoning step"}]}"""
+    
     agent = RequirementAgent(
         llm=llm, 
         tools=[wiki_tool,OpenMeteoTool(), calculator_tool],
         memory=UnconstrainedMemory(),
-        role="You are an expert Multi-hop Question Answering (QA) agent. Your primary role is to extract and combine information from the provided context to answer the user's question. Answer concisely. Answer in jason format only.",
+        role="You are an expert Multi-hop Question Answering (QA) agent. Your primary role is to extract and combine information from the provided context to answer the user's question. Answer in jason format only.",
         instructions=[
             "RULES and CONSTRAINTS:",
             "1. SOURCE ADHERENCE (NO HALLUCINATION): Your final answer MUST be based ONLY on the context you retrieve from the provided tools (VectorStoreSearchTool or WikipediaTool). Do not use external knowledge.",
             "2. MULTI-HOP: You must perform multi-step reasoning or use multiple tools/retrievals if the question requires it.",
             "3. FINAL FORMAT: Your ONLY final output MUST be a single, valid JSON object adhering strictly to the required keys. Do not include any text outside the JSON block.",
-            "4. THE JSON SCHEMA STRING: " + JSON_SCHEMA_STRING,
-            "5. Answer the user's question directly and concisely."
+            "4. THE JSON SCHEMA STRING: " + JSON_SCHEMA_STRING
         ],
 
     )
@@ -145,89 +164,71 @@ async def create_rag_test_cases():
     test_cases = []
     
     output_json = """{"question": "Which magazine was started first Arthur's Magazine or First for Women?","answer": "Arthur's Magazine","relevant_sentences": ["Arthur's Magazine (1844–1846) was an American literary periodical published in Philadelphia in the 19th century.","First for Women is a woman's magazine published by Bauer Media Group in the USA."]}"""
-    # Define test questions and expected outputs
-    test_data = [
-        (
-            "Which magazine was started first Arthur's Magazine or First for Women?",
-            output_json
-        ),
-        #(
-         #    "Which magazine was started first Arthur's Magazine or First for Women?",
-          #  bad_agent_json
-        #)
-        # (
-        #     "What tools can be used with BeeAI agents?",
-        #     "BeeAI agents can use various tools including Search tools (DuckDuckGoSearchTool), Weather tools (OpenMeteoTool), Knowledge tools (LangChainWikipediaTool), and many more available in the beeai_framework.tools module. Tools enhance the agent's capabilities by allowing interaction with external systems."
-        # ),
-        # (
-        #     "What memory types are available for agents?",
-        #     "Several memory types are available for different use cases: UnconstrainedMemory for unlimited storage, SlidingMemory for keeping only the most recent messages, TokenMemory for managing token limits, and SummarizeMemory for summarizing previous conversations."
-        # ),
-        # (
-        #     "How can I customize agent behavior in BeeAI Framework?",
-        #     "You can customize agent behavior in five ways: 1) Setting execution policy to control retries, timeouts, and iteration limits, 2) Overriding prompt templates including system prompts, 3) Adding tools to enhance capabilities, 4) Configuring memory for context management, and 5) Event observation to monitor execution and implement custom logging."
-        # )
-    ]
     
-    for question, expected_output in test_data:
-        # Run the agent
+    test_data = [
+        {
+            "question": "The Oberoi family is part of a hotel company that has a head office in what city?",
+            "answer": "Delhi",
+            "relevant_sentences": [
+            "The Oberoi family is an Indian family that is famous for its involvement in hotels, namely through The Oberoi Group.",
+            "The Oberoi Group is a hotel company with its head office in Delhi."
+            ],
+            "wiki_times": 2,
+            "supporting_titles": [
+            "Oberoi family",
+            "The Oberoi Group"
+            ]
+        }
+    ]
+    for item in test_data:
+        question = item["question"]
+        
+        HotpotQA_expected_output = item["answer"]
+        HotpotQA_context = item["relevant_sentences"]
+        HotpotQA_expected_tools = {"Wikipedia": item["wiki_times"]}
+        supporting_titles = item["supporting_titles"]
+        HotpotQA_tools_used = []
+        for name in supporting_titles:
+            HotpotQA_tools_used.append(ToolCall(name="Wikipedia", input_parameters={'query': name}))
+        
+        
+        ## Run the agent
         #response = await agent.run(question)
-
-        response = """{"final_answer": "Arthur's Magazine was started first. It was published from 1844 to 1846, while First for Women was started in 1989.", "tool_used": "Wikipedia", "supporting_sentences": ["Arthur's Magazine (1844–1846) was an American literary periodical published in Philadelphia in the 19th century.", "First for Women was an American woman's magazine published by McClatchey Media owned A360media. The magazine was started in 1989 by Bauer Media Group."], "reasoning_explanation": [{"step": 1, "logic": "I used the Wikipedia tool to find the start dates of both magazines."}, {"step": 2, "logic": "I compared the start dates and determined which magazine was started first."}] }"""
-        #bad_response=  """{"final_answer": "Arthur's Magazine","tool_used": "Intuition","supporting_sentences": [],"reasoning_explanation": [{"step": 1, "logic": "I looked at the name 'Arthur' and it reminds me of King Arthur from the middle ages, so it sounds very old."},{"step": 2, "logic": "The name 'First for Women' sounds like a modern feminist movement, so it must be new."},{"step": 3, "logic": "Therefore, based on the vibes of the names, Arthur's Magazine is older."}]}"""
         #actual_output = response.result.text
-        actual_output = response
-        json_data = json.loads(actual_output)
-
-        agent_final_answer = json_data.get("final_answer", "")
-        agent_supporting_sentences = json_data.get("supporting_sentences", [])
-
+        #agent_tool_usage_times = count_tool_usage(response.memory.messages)
+        agent_response =  """{"final_answer": "The head office of The Oberoi Group is in New Delhi, India.", "tool_used": "Wikipedia", "supporting_sentences": ["The Oberoi Group is a luxury hotel group with its head office in New Delhi, India."], "reasoning_explanation": [{"step": 1, "logic": "The Wikipedia search revealed that The Oberoi Group is a luxury hotel group with its head office in New Delhi, India."}]}"""
+        agent_response_json = json.loads(agent_response)
         
-        # Extract retrieval context from message history
-        #retrieval_context = extract_retrieval_context(response.memory.messages)
+        agent_final_answer = agent_response_json.get("final_answer", "")
+        agent_supporting_sentences = agent_response_json.get("supporting_sentences", [])
+        agent_tools_used = [
+            ToolCall(name="Wikipedia", input_parameters={'full_text': True, 'query': 'Oberoi Hotels & Resorts'})
+           
+        ]
+        agent_tool_usage_times = {"Wikipedia": 2}
+                
         
-        #reasoning_text = "\n".join([f"Step {step.step}: {step.logic}" for step in agent_output.reasoning_explanation])
-
-        #actual_output = [response.result.text, json.loadstool_usage]
-        actual_output =agent_final_answer
-
-        HotpotQA_expected_output = json.loads(expected_output).get("answer", "")
-        HotpotQA_context = json.loads(expected_output).get("relevant_sentences", [])
-        # Create test case
         test_case = LLMTestCase(
             input=question,
-            actual_output=actual_output,                
+            actual_output=agent_final_answer,                
             expected_output=HotpotQA_expected_output,                
             retrieval_context=agent_supporting_sentences,  
-            context= HotpotQA_context  
+            context= HotpotQA_context,
+            tools_called= agent_tools_used,
+            expected_tools= HotpotQA_tools_used,
+            additional_metadata={
+                "expected_facts": HotpotQA_context,
+                "tool_usage":  agent_tool_usage_times,
+                "expected_tool_usage": HotpotQA_expected_tools,
+                "supporting_titles": supporting_titles, 
+            }
+            
         )                                 
         test_cases.append(test_case)
 
-        #TODO trajectory check
-    
     return test_cases
 
-def create_trajectory_metric(model, threshold=0.7):
-    trajectory_criteria = """
-    Evaluate the 'Reasoning Trajectory' provided in the Actual Output.
-    
-    1. **Logical Flow:** Do the steps follow a logical sequence? (e.g., Step 1 leads to Step 2).
-    2. **Tool Usage:** Did the agent decide to use a tool when it was necessary?
-    3. **Grounding:** Is every reasoning step supported by the 'Retrieval Context'? The agent should not make assumptions outside of the provided text.
-    4. **Relevance:** Do the reasoning steps directly address the user's 'Input'?
-    5. **Conclusion:** Do the steps logically justify the 'Final Answer'?
-    """
-    return GEval(
-        name="Trajectory Logic",
-        criteria=trajectory_criteria,
-        evaluation_params=[
-            LLMTestCaseParams.INPUT, 
-            LLMTestCaseParams.ACTUAL_OUTPUT, 
-            LLMTestCaseParams.RETRIEVAL_CONTEXT
-        ],
-        model=model,
-        threshold=threshold
-    )
+
 
 @pytest.mark.asyncio
 async def test_rag() -> None:
@@ -238,73 +239,64 @@ async def test_rag() -> None:
 
     eval_model = DeepEvalLLM.from_name(eval_model_name)
     # RAG-specific metrics
-    contextual_recall = ContextualRecallMetric(
-        model = eval_model,#DeepEvalLLM.from_name(os.environ["EVAL_CHAT_MODEL_NAME"]),
-        threshold=0.7
-    )
     contextual_relevancy = FaithfulnessMetric(
-        model = eval_model,#DeepEvalLLM.from_name(os.environ["EVAL_CHAT_MODEL_NAME"]),
-        threshold=0.7
-    )
-    contextual_precision = AnswerRelevancyMetric(
-        model = eval_model,#DeepEvalLLM.from_name(os.environ["EVAL_CHAT_MODEL_NAME"]),
-        threshold=0.7
-    )
-    trajectory_metric = create_trajectory_metric(
         model = eval_model,
         threshold=0.7
     )
+    contextual_precision = AnswerRelevancyMetric(
+        model = eval_model,
+        threshold=0.7
+    )
+    tool_correctness_metric = ToolCorrectnessMetric(
+        include_reason=False
+    )
+    ######### final answer
+    # Metric 1: Ensure the final answer exactly matches the expected answer
+    #answer_exact_match_metric = ExactMatchMetric(threshold=1.0)
 
-    #TODO: add more supporting sentences metric
-    #TODO: add more reasoning steps metric
-    #TODO: KEYs
+    # Metric 2: Ensure the final answer with llm as a judge
+    answer_llm_judge_metric = AnswerLLMJudgeMetric(
+        model=eval_model,
+        threshold=0.7,
+    )
+
+    ######### tools
+    # Metric 3: Compare tool usage and count vs expected tool usage and count
+    tool_usage_metric = ToolUsageMetric()
+
+    # Metric 4: Compare tool arguments
+    argument_metric = ArgumentCorrectnessMetric(
+        threshold=0.7,
+        model = eval_model,
+        include_reason=True
+    )
+
+    ######### supporting facts
+
+    # Metric 5: Compare retrieved supporting sentences with expected facts - llm as a judge
+    facts_metric = FactsSimilarityMetric(
+        model=eval_model
+    )    
+
+    # Metric 6: measures how much of the truly relevant context (expected_facts / ground-truth evidence) the retrieved context covers.
+    contextual_recall_metric = ContextualRecallMetric(
+        model = eval_model,
+        threshold=0.7
+    )
+    
+    
 
     # Evaluate using DeepEval
     eval_results = evaluate(
         test_cases=test_cases,
-        metrics=[contextual_precision, contextual_recall, contextual_relevancy, trajectory_metric],
-
+        #metrics=[contextual_precision, contextual_recall_metric, contextual_relevancy, tool_correctness_metric,argument_metric, facts_metric, tool_usage_metric, answer_llm_judge_metric],
+        metrics=[argument_metric]
     )
-    print(eval_results)
+    
+    
     
 if __name__ == "__main__":
     import asyncio
     asyncio.run(test_rag())
 
 
-"""
-Prompt:
-I have two jason files. One is from HotpotQA dataset with context and answers.
-The other is from an agent that uses retrieval augmented generation (RAG) to answer questions.
-I want to compare the two files to see how well the agent performed compared to the ground truth answers in the HotpotQA dataset.
-i want to use deepeval framework to compare the two files.
-hotputqa file format:
-
-[
-  {
-    "question": "Which magazine was started first Arthur's Magazine or First for Women?",
-    "answer": "Arthur's Magazine",
-    "relevant_sentences": [
-      "Arthur's Magazine (1844–1846) was an American literary periodical published in Philadelphia in the 19th century.",
-      "First for Women is a woman's magazine published by Bauer Media Group in the USA."
-    ],
-    "wiki_times": 2
-  },
-  {
-    "question": "The Oberoi family is part of a hotel company that has a head office in what city?",
-    "answer": "Delhi",
-    "relevant_sentences": [
-      "The Oberoi family is an Indian family that is famous for its involvement in hotels, namely through The Oberoi Group.",
-      "The Oberoi Group is a hotel company with its head office in Delhi."
-    ],
-    "wiki_times": 2
-  }
-
-
-my agent:
-
-{"final_answer": "Arthur's Magazine was started first. It was published from 1844 to 1846, while First for Women was started in 1989.", "tool_used": "Wikipedia", "supporting_sentences": ["Arthur's Magazine (1844–1846) was an American literary periodical published in Philadelphia in the 19th century.", "First for Women was an American woman's magazine published by McClatchey Media owned A360media. The magazine was started in 1989 
-by Bauer Media Group."], "reasoning_explanation": [{"step": 1, "logic": "I used the Wikipedia tool to find the start dates of both magazines."}, {"step": 2, "logic": "I compared the start dates and determined which magazine was started first."}] }
-
-which metrics from deepeval should i use to compare the two files and how?
-"""

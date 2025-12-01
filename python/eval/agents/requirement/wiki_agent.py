@@ -6,6 +6,7 @@ import asyncio
 import traceback
 import tempfile
 from typing import List
+from urllib import response
 from beeai_framework.tools.tool import Tool
 import pytest
 from deepeval import evaluate
@@ -18,9 +19,11 @@ load_dotenv()
 examples_path = Path(__file__).parent.parent.parent.parent / "examples" / "agents" / "experimental" / "requirement"
 sys.path.insert(0, str(examples_path))
 
-from examples.agents.experimental.requirement.rag import setup_vector_store
+#from examples.agents.experimental.requirement.rag import setup_vector_store
 
-from beeai_framework.agents.experimental import RequirementAgent
+from beeai_framework.agents.experimental.agent import RequirementAgent
+
+
 from beeai_framework.backend import ChatModel, ToolMessage
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.tools.search.retrieval import VectorStoreSearchTool
@@ -33,7 +36,7 @@ from beeai_framework.tools.weather import OpenMeteoTool
 from beeai_framework.tools.code import PythonTool, LocalPythonStorage
 
 from eval.model import DeepEvalLLM
-
+from deepeval.test_case import LLMTestCase, ToolCall
 
 def create_calculator_tool() -> Tool:
     """
@@ -80,6 +83,7 @@ async def create_agent() -> RequirementAgent:
     #explanation of reasoning for each sentence by its number
     #tool that was used
     #
+    JSON_SCHEMA_STRING = """{"final_answer": "...","tool_used": "...","supporting_sentences": ["<sentence 1>", "<sentence 2>"],"reasoning_explanation": [{"step": 1, "name": "The reasoning step"}]}"""    
     JSON_SCHEMA_STRING = """{"final_answer": "...","tool_used": "...","supporting_sentences": ["<sentence 1>", "<sentence 2>"],"reasoning_explanation": [{"step": 1, "logic": "The reasoning step"}]}"""
     agent = RequirementAgent(
         llm=llm, 
@@ -126,6 +130,26 @@ def extract_retrieval_context(messages) -> List[str]:
     
     return retrieval_context
 
+def tool_calls_from_steps(response) -> List[ToolCall]:
+    actual_tools = []
+    if hasattr(response, 'state') and hasattr(response.state, 'steps'):
+            for step in response.state.steps:
+                # Check if there is a tool in this step
+                if hasattr(step, 'tool') and step.tool:
+                    tool_name = step.tool.name
+            
+                    # Filter out 'FinalAnswerTool' because it's internal (not a retrieval tool)
+                    if tool_name != "FinalAnswerTool":
+                        # Create the DeepEval ToolCall object
+                        # We include 'input_parameters' to make the check even better
+                        t_call = ToolCall(
+                            name=tool_name,
+                            input_parameters=step.input  # This passes the arguments used (e.g. search query)
+                        )
+                        actual_tools.append(t_call)
+    return actual_tools
+    
+    
 
 async def create_rag_test_cases():
     """
@@ -134,13 +158,14 @@ async def create_rag_test_cases():
     agent = await create_agent()
     
     test_cases = []
-    
+    output_json = """{"question": "Which magazine was started first Arthur's Magazine or First for Women?","answer": "Arthur's Magazine","relevant_sentences": ["Arthur's Magazine (1844–1846) was an American literary periodical published in Philadelphia in the 19th century.","First for Women is a woman's magazine published by Bauer Media Group in the USA."]}"""
+
     # Define test questions and expected outputs
     test_data = [
-        (
-            "Which magazine was started first Arthur's Magazine or First for Women?",
-            "Arthur's Magazine"
-        ),
+        #(
+         #   "Which magazine was started first Arthur's Magazine or First for Women?",
+          #  output_json
+        #),
         (
             "The Oberoi family is part of a hotel company that has a head office in what city?",
             "New Delhi"
@@ -163,8 +188,8 @@ async def create_rag_test_cases():
         # Run the agent
         response = await agent.run(question)
         
-        #actual_output = response.result.text + extract_tool_usage_and_facts_trace(response.memory.messages)
         actual_output = response.result.text
+        actual_tools = tool_calls_from_steps(response)
 
         # Extract retrieval context from message history
         retrieval_context = extract_retrieval_context(response.memory.messages)
@@ -181,6 +206,7 @@ async def create_rag_test_cases():
         #TODO trajectory check
     
     return test_cases
+
 
 
 @pytest.mark.asyncio
