@@ -187,7 +187,10 @@ async def create_rag_test_cases():
     for question, expected_output in test_data:
         # Run the agent
         response = await agent.run(question)
-        
+        # המרה למילון רגיל
+        data_dict = response.model_dump() 
+
+        print(json.dumps(data_dict, indent=2, default=str))
         actual_output = response.result.text
         actual_tools = tool_calls_from_steps(response)
 
