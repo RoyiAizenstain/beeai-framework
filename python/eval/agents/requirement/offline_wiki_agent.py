@@ -53,7 +53,7 @@ from deepeval.metrics import GEval
 from deepeval.test_case import LLMTestCaseParams
 from deepeval.test_case import LLMTestCase, ToolCall
 from deepeval.metrics import ToolCorrectnessMetric, ArgumentCorrectnessMetric
-
+import pickle
 import pandas as pd
 
 def count_tool_usage(messages):
@@ -414,7 +414,7 @@ async def test_rag() -> None:
 
     # Evaluate using DeepEval
     eval_results = evaluate(test_cases=test_cases, metrics=metrics)
-
+    
     # Persist raw eval results (before any table processing)
     try:
         raw_path = Path("eval_results_raw.pkl")
@@ -493,7 +493,8 @@ async def test_rag() -> None:
     print(fmt_row(all_rows[-1]))
     print("=== End Table ===\n")
     
-
+    
+    
 if __name__ == "__main__":
     import asyncio
     asyncio.run(test_rag())
