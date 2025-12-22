@@ -1,6 +1,7 @@
 # --- Standard Library Imports ---
 import asyncio
 import json
+import logging
 import os
 import pickle
 import sys
@@ -9,6 +10,35 @@ import traceback
 from pathlib import Path
 from collections import Counter
 from typing import List
+
+# --- Logger Configuration ---
+def setup_logger():
+    logger = logging.getLogger("DeepEvalAgentExample")
+    logger.setLevel(logging.INFO)
+    
+    # Create file handler
+    log_file = Path("evaluation.log")
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    file_handler.setLevel(logging.INFO)
+    
+    # Create console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    
+    # Create formatter and add it to handlers
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    console_handler.setFormatter(formatter)
+    
+    # Add handlers to logger
+    if not logger.handlers:
+        logger.addHandler(file_handler)
+        logger.addHandler(console_handler)
+    
+    return logger
+
+logger = setup_logger()
+
 
 # --- Path Configuration (Must run before local imports) ---
 # Ensure the monorepo's python package root is importable
@@ -25,6 +55,7 @@ if str(CURRENT_DIR) not in sys.path:
 import pytest
 from dotenv import load_dotenv
 from deepeval import evaluate
+from deepeval.evaluate import DisplayConfig
 from deepeval.metrics import (
     AnswerRelevancyMetric,
     ArgumentCorrectnessMetric,
@@ -426,8 +457,9 @@ async def create_rag_test_cases(num_rows: int = 50):
     #     },
     # }
 
-    for item in test_data:
+    for i, item in enumerate(test_data):
         question = item["question"]
+        logger.info(f"Running agent for test case {i+1}/{len(test_data)}: {question[:50]}...")
         
         HotpotQA_expected_output = item["answer"]
         HotpotQA_context = item["relevant_sentences"]
@@ -635,20 +667,45 @@ async def test_rag() -> None:
         facts_metric,
     ]
 
-    # Evaluate using DeepEval
-    eval_results = evaluate(test_cases=test_cases, metrics=metrics)
-    
-    # Persist raw eval results (before any table processing)
-    try:
-        raw_path = Path("eval_results_raw.pkl")
-        with raw_path.open("wb") as f:
-            pickle.dump(eval_results, f)
-        print(f"Saved raw eval results to {raw_path}")
-    except Exception as exc:
-        print(f"Warning: failed to persist eval results: {exc}")
+    # Evaluate using DeepEval incrementally
+    all_test_results = []
+    for i, test_case in enumerate(test_cases):
+        logger.info(f"Evaluating test case {i+1}/{len(test_cases)}...")
+        try:
+            # Run evaluation for a single test case
+            res = evaluate(
+                test_cases=[test_case], 
+                metrics=metrics,
+                display_config=DisplayConfig(
+                    show_indicator=False, 
+                    print_results=False, 
+                    verbose_mode=False
+                )
+            )
+            
+            # Extract results and add to our collection
+            step_results = (
+                getattr(res, "results", None)
+                or getattr(res, "test_results", None)
+                or []
+            )
+            all_test_results.extend(step_results)
+            
+            # Pickle the accumulated results after each test case
+            try:
+                raw_path = Path("eval_results_raw.pkl")
+                with raw_path.open("wb") as f:
+                    pickle.dump(all_test_results, f)
+                logger.info(f"Test case {i+1} saved to {raw_path}")
+            except Exception as pickle_exc:
+                logger.error(f"Failed to pickle after test case {i+1}: {pickle_exc}")
+                
+        except Exception as eval_exc:
+            logger.error(f"Error evaluating test case {i+1}: {eval_exc}")
+            traceback.print_exc()
 
     # Build and print the evaluation results table
-    table = create_evaluation_table(eval_results, metrics)
+    table = create_evaluation_table(all_test_results, metrics)
     print_evaluation_table(table)
     
     
