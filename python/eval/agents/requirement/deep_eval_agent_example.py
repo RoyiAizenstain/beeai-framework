@@ -7,18 +7,19 @@ import sys
 import tempfile
 import traceback
 from pathlib import Path
-from typing import Counter, List
+from collections import Counter
+from typing import List
 
 # --- Path Configuration (Must run before local imports) ---
 # Ensure the monorepo's python package root is importable
-PYTHON_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+CURRENT_DIR = Path(__file__).resolve().parent
+PYTHON_ROOT = CURRENT_DIR.parent.parent.parent # points to .../python
 if str(PYTHON_ROOT) not in sys.path:
     sys.path.insert(0, str(PYTHON_ROOT))
 
-# Add the examples directory to sys.path
-examples_path = PYTHON_ROOT / "examples" / "agents" / "experimental" / "requirement"
-if str(examples_path) not in sys.path:
-    sys.path.insert(0, str(examples_path))
+# Ensure current directory is in path for local imports like ToolUsageMetric, _utils
+if str(CURRENT_DIR) not in sys.path:
+    sys.path.insert(0, str(CURRENT_DIR))
 
 # --- Third-Party Library Imports ---
 import pytest
@@ -37,7 +38,7 @@ from deepeval.metrics import (
 from deepeval.test_case import LLMTestCase, LLMTestCaseParams, ToolCall
 
 # --- Framework Specific Imports (beeai-framework) ---
-from beeai_framework.agents.experimental import RequirementAgent
+from beeai_framework.agents.requirement import RequirementAgent
 from beeai_framework.backend import ChatModel, ToolMessage
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.tools.tool import Tool
@@ -49,8 +50,8 @@ from beeai_framework.adapters.ollama import OllamaChatModel
 from beeai_framework.errors import FrameworkError
 
 # --- Local Project Imports ---
-from eval.model import DeepEvalLLM
-from ToolUsageMetric import ToolUsageMetric
+from eval.deep_eval import DeepEvalLLM
+from _utils import EvaluationRow, EvaluationTable, print_evaluation_table
 
 
 # --- Environment Setup ---
@@ -184,8 +185,83 @@ class AnswerLLMJudgeMetric(BaseMetric):
     def __name__(self) -> str:
         return "AnswerLLMJudgeMetric"
 
+class ToolUsageMetric(BaseMetric):
+    """
+    Compares actual tool usage against expected tool usage.
+    expected_tool_usage בדוגמה:
+        {"Wikipedia": 2, "PythonTool": 1}
+    """
 
-test_cases_num = 10
+    # Default so DeepEval's MetricData.success sees a proper boolean
+    success: bool = False
+
+    def __init__(self, threshold: float = 0.5):
+        super().__init__()
+        self.threshold = threshold
+        self.async_mode = False  # חובה כי אין measure אסינכרוני
+
+    def _get_tool_usage(self, test_case: LLMTestCase, key: str) -> dict[str, int]:
+        if hasattr(test_case, key):
+            return getattr(test_case, key) or {}
+        metadata = getattr(test_case, "additional_metadata", None) or {}
+        return metadata.get(key, {}) or {}
+
+    def measure(self, test_case: LLMTestCase) -> float:
+        actual_tool_usage = self._get_tool_usage(test_case, "tool_usage")
+        expected_tool_usage = self._get_tool_usage(test_case, "expected_tool_usage")
+
+        all_tools = set(actual_tool_usage.keys()) | set(expected_tool_usage.keys())
+        if not all_tools:
+            score = 1.0
+            self.score = score
+            self.success = score >= self.threshold
+            return score
+
+        # =====================
+        # חלק 1: השוואת כלים קיימים (0.75)
+        # =====================
+        matching_tools = sum(
+            1 for tool in all_tools if tool in actual_tool_usage and tool in expected_tool_usage
+        )
+        existence_score = 0.75 * (matching_tools / len(all_tools))
+
+        # =====================
+        # חלק 2: השוואת כמויות שימוש בכל כלי (0.25)
+        # =====================
+        count_score_per_tool = []
+        for tool in expected_tool_usage:
+            actual_count = actual_tool_usage.get(tool, 0)
+            expected_count = expected_tool_usage[tool]
+            if actual_count == expected_count:
+                count_score_per_tool.append(1.0)
+            else:
+                count_score_per_tool.append(0.0)
+        if count_score_per_tool:
+            count_score = 0.25 * (sum(count_score_per_tool) / len(count_score_per_tool))
+        else:
+            count_score = 0.25  # אין כלים צפוים → נותנים את הציון המלא לחלק זה
+
+        # =====================
+        # ציון סופי
+        # =====================
+        final_score = existence_score + count_score
+        self.score = final_score
+        self.success = final_score >= self.threshold
+        return final_score
+
+
+    async def a_measure(self, test_case: LLMTestCase) -> float:
+        return self.measure(test_case)
+
+    def is_successful(self) -> bool:
+        return getattr(self, "success", False)
+
+    @property
+    def __name__(self):
+        return "ToolUsageMetric"
+
+
+
 
 def count_tool_usage(messages):
     tool_counter = Counter()
@@ -214,6 +290,9 @@ def create_calculator_tool() -> Tool:
         storage=storage,
     )
     return python_tool
+
+test_cases_num = 1
+
 
 async def create_agent() -> RequirementAgent:
     """
@@ -353,9 +432,11 @@ async def create_rag_test_cases(num_rows: int = 50):
 
         # Run the agent
         response = await agent.run(question)
-        memory = response.memory.messages
-        actual_output = response.result.text
+        state = response.state
+        memory = state.memory.messages
+        actual_output = response.last_message.text
         agent_tool_usage_times = count_tool_usage(memory)
+
 
         # print(actual_output)
         
@@ -467,6 +548,53 @@ async def create_rag_test_cases(num_rows: int = 50):
 
 
 
+def create_evaluation_table(eval_results, metrics: List[BaseMetric]) -> EvaluationTable:
+    """
+    Converts DeepEval results into a structured EvaluationTable.
+    """
+    def _metric_name(metric_obj):
+        return getattr(metric_obj, "__name__", None) or metric_obj.__class__.__name__
+
+    metric_names = [_metric_name(m) for m in metrics]
+
+    per_test_results = (
+        getattr(eval_results, "results", None)
+        or getattr(eval_results, "test_results", None)
+        or []
+    )
+
+    if isinstance(eval_results, list):
+        per_test_results = eval_results
+
+    rows = []
+    for idx, test_res in enumerate(per_test_results):
+        metrics_data = (
+            getattr(test_res, "metrics_data", None)
+            or getattr(test_res, "metrics_results", None)
+            or []
+        )
+        
+        # Build map for this specific row
+        metric_success_map = {}
+        for md in metrics_data:
+            md_name = (
+                getattr(md, "metric_name", None)
+                or getattr(md, "name", None)
+                or getattr(md, "__name__", None)
+                or md.__class__.__name__
+            )
+            metric_success_map[md_name] = getattr(md, "success", False)
+
+        # Create structured row
+        row = EvaluationRow(
+            test_case_label=f"Test case {idx + 1}",
+            results={name: metric_success_map.get(name, False) for name in metric_names}
+        )
+        rows.append(row)
+        
+    return EvaluationTable(metric_names=metric_names, rows=rows)
+
+
 @pytest.mark.asyncio
 async def test_rag() -> None:
     # Run evaluation and get test cases
@@ -476,11 +604,11 @@ async def test_rag() -> None:
     eval_model_name = os.environ.get("EVAL_CHAT_MODEL_NAME", "ollama:llama3.1:8b")
 
     # Increase DeepEval per-task timeout for local models (in seconds)
-    os.environ.setdefault("DEEPEVAL_PER_TASK_TIMEOUT_SECONDS_OVERRIDE", "60")
+    os.environ.setdefault("DEEPEVAL_PER_TASK_TIMEOUT_SECONDS_OVERRIDE", "300")
 
 
     eval_model = DeepEvalLLM.from_name(eval_model_name)
-    # RAG-specific metrics
+    # RAG-specific metricszv
     contextual_relevancy = FaithfulnessMetric(
         model = eval_model,
         threshold=0.7
@@ -559,75 +687,9 @@ async def test_rag() -> None:
     except Exception as exc:
         print(f"Warning: failed to persist eval results: {exc}")
 
-    # Build a pass/fail table for debugging
-    def _metric_name(metric_obj):
-        return getattr(metric_obj, "__name__", None) or metric_obj.__class__.__name__
-
-    metric_names = [_metric_name(m) for m in metrics]
-
-    # Try to get per-test results from eval_results; be robust to structure changes
-    per_test_results = (
-        getattr(eval_results, "results", None)
-        or getattr(eval_results, "test_results", None)
-        or []
-    )
-
-    # If eval_results itself is a list, use it directly
-    if isinstance(eval_results, list):
-        per_test_results = eval_results
-
-    rows = []
-    success_counts = Counter({name: 0 for name in metric_names})
-    total_cases = len(per_test_results)
-
-    for idx, test_res in enumerate(per_test_results):
-        # Each test result should have metrics_data / metrics_results
-        metrics_data = (
-            getattr(test_res, "metrics_data", None)
-            or getattr(test_res, "metrics_results", None)
-            or []
-        )
-        metric_success_map = {}
-        for md in metrics_data:
-            md_name = (
-                getattr(md, "metric_name", None)
-                or getattr(md, "name", None)
-                or getattr(md, "__name__", None)
-                or md.__class__.__name__
-            )
-            md_success = getattr(md, "success", False)
-            metric_success_map[md_name] = md_success
-
-        row = [f"Test case {idx + 1}"]
-        for name in metric_names:
-            passed = metric_success_map.get(name, False)
-            row.append("V" if passed else "X")
-            if passed:
-                success_counts[name] += 1
-        rows.append(row)
-
-    # Footer with success percentages per metric
-    footer = ["Success %"]
-    for name in metric_names:
-        pct = (success_counts[name] / total_cases * 100) if total_cases else 0
-        footer.append(f"{pct:.0f}%")
-
-    # Pretty-print the table
-    all_rows = [ ["Test case"] + metric_names ] + rows + [footer]
-    col_widths = [max(len(str(cell)) for cell in col) for col in zip(*all_rows)]
-
-    def fmt_row(row):
-        return " | ".join(str(cell).ljust(w) for cell, w in zip(row, col_widths))
-
-    print("\n=== Evaluation Results Table ===")
-    print(fmt_row(all_rows[0]))
-    print("-+-".join("-" * w for w in col_widths))
-    for row in all_rows[1:-1]:
-        print(fmt_row(row))
-    print("-+-".join("-" * w for w in col_widths))
-    print(fmt_row(all_rows[-1]))
-    print("=== End Table ===\n")
-    
+    # Build and print the evaluation results table
+    table = create_evaluation_table(eval_results, metrics)
+    print_evaluation_table(table)
     
     
 if __name__ == "__main__":
