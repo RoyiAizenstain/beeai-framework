@@ -1,8 +1,6 @@
 import sys
 from pathlib import Path
-
 from beeai_framework.tools.tool import Tool
-
 from deepeval import evaluate
 from deepeval.test_case import LLMTestCase
 

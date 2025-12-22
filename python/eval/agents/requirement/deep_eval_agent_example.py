@@ -1,60 +1,188 @@
+# --- Standard Library Imports ---
+import asyncio
 import json
 import os
-import sys
-from pathlib import Path
-import asyncio
-import traceback
-import tempfile
 import pickle
+import sys
+import tempfile
+import traceback
+from pathlib import Path
 from typing import Counter, List
 
-# Ensure the monorepo's python package root is importable when running the file directly
+# --- Path Configuration (Must run before local imports) ---
+# Ensure the monorepo's python package root is importable
 PYTHON_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 if str(PYTHON_ROOT) not in sys.path:
     sys.path.insert(0, str(PYTHON_ROOT))
 
-from beeai_framework.tools.tool import Tool
+# Add the examples directory to sys.path
+examples_path = PYTHON_ROOT / "examples" / "agents" / "experimental" / "requirement"
+if str(examples_path) not in sys.path:
+    sys.path.insert(0, str(examples_path))
+
+# --- Third-Party Library Imports ---
 import pytest
+from dotenv import load_dotenv
 from deepeval import evaluate
 from deepeval.metrics import (
-    FaithfulnessMetric,
     AnswerRelevancyMetric,
+    ArgumentCorrectnessMetric,
+    BaseMetric,
     ContextualRecallMetric,
     ExactMatchMetric,
+    FaithfulnessMetric,
+    GEval,
+    ToolCorrectnessMetric,
 )
+from deepeval.test_case import LLMTestCase, LLMTestCaseParams, ToolCall
 
-from deepeval.test_case import LLMTestCase
-from dotenv import load_dotenv
-
-from AnswerLLMJudgeMetric import AnswerLLMJudgeMetric
-from ToolUsageMetric import ToolUsageMetric
-from FactsSimilarityMetric import FactsSimilarityMetric
-load_dotenv()
-
-# Add the examples directory to sys.path to import setup_vector_store
-examples_path = Path(__file__).parent.parent.parent.parent / "examples" / "agents" / "experimental" / "requirement"
-sys.path.insert(0, str(examples_path))
-
-from examples.agents.experimental.requirement.rag import setup_vector_store
-
+# --- Framework Specific Imports (beeai-framework) ---
 from beeai_framework.agents.experimental import RequirementAgent
 from beeai_framework.backend import ChatModel, ToolMessage
 from beeai_framework.memory import UnconstrainedMemory
+from beeai_framework.tools.tool import Tool
 from beeai_framework.tools.search.retrieval import VectorStoreSearchTool
+from beeai_framework.tools.search.wikipedia import WikipediaTool
+from beeai_framework.tools.weather import OpenMeteoTool
+from beeai_framework.tools.code import PythonTool, LocalPythonStorage
 from beeai_framework.adapters.ollama import OllamaChatModel
 from beeai_framework.errors import FrameworkError
-from beeai_framework.tools.search.wikipedia import (WikipediaTool)
-from beeai_framework.tools.weather import OpenMeteoTool
 
-from beeai_framework.tools.code import PythonTool, LocalPythonStorage
-
+# --- Local Project Imports ---
 from eval.model import DeepEvalLLM
-from deepeval.metrics import GEval
-from deepeval.test_case import LLMTestCaseParams
-from deepeval.test_case import LLMTestCase, ToolCall
-from deepeval.metrics import ToolCorrectnessMetric, ArgumentCorrectnessMetric
-import pickle
-import pandas as pd
+from ToolUsageMetric import ToolUsageMetric
+
+
+# --- Environment Setup ---
+load_dotenv()
+
+class FactsSimilarityMetric(BaseMetric):
+    # Default so DeepEval's MetricData.success sees a proper boolean
+    success: bool = False
+
+    def __init__(self, model: DeepEvalLLM | None = None, threshold: float = 0.5):
+        super().__init__()
+        # DeepEval expects model to be a DeepEvalBaseLLM; we use our wrapper.
+        self.model: DeepEvalLLM = model or DeepEvalLLM.from_name("ollama:llama3.1:8b")
+        self.threshold = threshold
+        # Let DeepEval use async execution path (a_measure)
+        self.async_mode = True
+
+    def _get_expected(self, test_case: LLMTestCase) -> list[str]:
+        if hasattr(test_case, "expected_facts"):
+            return getattr(test_case, "expected_facts")
+        metadata = getattr(test_case, "additional_metadata", None) or {}
+        return metadata.get("expected_facts", [])
+
+    async def a_measure(
+        self,
+        test_case: LLMTestCase,
+        _show_indicator: bool = True,
+        _in_component: bool = False,
+        _log_metric_to_confident: bool = True,
+    ) -> float:
+        """Async entrypoint DeepEval actually uses; we ignore the extra flags."""
+        actual_facts = getattr(test_case, "retrieval_context", [])
+        expected_facts = self._get_expected(test_case)
+        if not expected_facts:
+            score = 1.0 if not actual_facts else 0.0
+            self.score = score
+            self.success = score >= self.threshold
+            return score
+
+        prompt = (
+            "You are an evaluator.\n"
+            "Compare the two lists of supporting facts.\n\n"
+            f"Actual facts:\n{actual_facts}\n\n"
+            f"Expected facts:\n{expected_facts}\n\n"
+            "Return ONLY a number between 0 and 1 (no text), where:\n"
+            "0 = completely different, 1 = identical in meaning.\n"
+        )
+        text = await self.model.a_generate(prompt)  # uses DeepEvalLLM.a_generate
+        score = float(str(text).strip())
+        score = max(0.0, min(1.0, score))
+        self.score = score
+        self.success = score >= self.threshold
+        return score
+
+    def measure(self, test_case: LLMTestCase) -> float:
+        """Synchronous wrapper for environments that call measure() instead of a_measure()."""
+        import asyncio
+
+        return asyncio.run(self.a_measure(test_case))
+
+    def is_successful(self) -> bool:
+        return getattr(self, "success", False)
+
+    @property
+    def __name__(self):
+        return "FactsSimilarityMetric"
+
+class AnswerLLMJudgeMetric(BaseMetric):
+    """
+    Uses an LLM as a judge to compare the actual answer vs the expected answer.
+    Returns a semantic similarity score between 0 and 1.
+    """
+
+    success: bool = False  # ensure MetricData.success is always a bool
+
+    def __init__(self, model: DeepEvalLLM | None = None, threshold: float = 0.5):
+        super().__init__()
+        # DeepEval expects model to be a DeepEvalBaseLLM; we use our wrapper.
+        self.model: DeepEvalLLM = model or DeepEvalLLM.from_name("ollama:llama3.1:8b")
+        self.threshold = threshold
+        self.async_mode = True  # DeepEval will call a_measure
+
+    async def a_measure(
+        self,
+        test_case: LLMTestCase,
+        _show_indicator: bool = True,
+        _in_component: bool = False,
+        _log_metric_to_confident: bool = True,
+    ) -> float:
+        actual = (test_case.actual_output or "").strip()
+        expected = (test_case.expected_output or "").strip()
+
+        # If no expected answer, treat as trivial pass/fail
+        if not expected:
+            score = 1.0 if not actual else 0.0
+            self.score = score
+            self.success = score >= self.threshold
+            return score
+
+        prompt = (
+            "You are an evaluator.\n"
+            "Compare the model's answer to the expected answer.\n\n"
+            f"Question:\n{test_case.input}\n\n"
+            f"Model answer:\n{actual}\n\n"
+            f"Expected answer:\n{expected}\n\n"
+            "Return ONLY a number between 0 and 1 (no text), where:\n"
+            "0 = completely incorrect or unrelated,\n"
+            "1 = fully correct and equivalent in meaning.\n"
+        )
+
+        text = await self.model.a_generate(prompt)  # DeepEvalLLM async call
+        try:
+            score = float(str(text).strip())
+        except Exception:
+            score = 0.0
+
+        score = max(0.0, min(1.0, score))
+        self.score = score
+        self.success = score >= self.threshold
+        return score
+
+    def measure(self, test_case: LLMTestCase) -> float:
+        """Sync wrapper in case something calls measure() directly."""
+        import asyncio
+        return asyncio.run(self.a_measure(test_case))
+
+    def is_successful(self) -> bool:
+        return getattr(self, "success", False)
+
+    @property
+    def __name__(self) -> str:
+        return "AnswerLLMJudgeMetric"
 
 
 test_cases_num = 10
