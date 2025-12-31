@@ -329,7 +329,7 @@ def create_calculator_tool() -> Tool:
     )
     return python_tool
 
-test_cases_num = 1
+test_cases_num = 50
 
 
 async def create_agent() -> RequirementAgent:
@@ -423,7 +423,6 @@ async def create_rag_test_cases(num_rows: int = 50):
     """
     Create RAG test cases by directly invoking the agent and extracting retrieval context.
     """
-    agent = await create_agent()
     
     test_cases = []
 
@@ -458,6 +457,7 @@ async def create_rag_test_cases(num_rows: int = 50):
     # }
 
     for i, item in enumerate(test_data):
+        agent = await create_agent()
         question = item["question"]
         logger.info(f"Running agent for test case {i+1}/{len(test_data)}: {question[:50]}...")
         
@@ -474,42 +474,43 @@ async def create_rag_test_cases(num_rows: int = 50):
         state = response.state
         memory = state.memory.messages
         actual_output = response.last_message.text
-        agent_tool_usage_times = count_tool_usage(memory)
 
+        agent_supporting_sentences = []
+        actual_tool_calls_count = 0 
 
-        # print(actual_output)
-        
-        # # Use a stubbed agent response (per question) to avoid waiting for live model calls.
-        # stub = stub_map.get(question, {})
-        # stub_answer = stub.get("answer", HotpotQA_expected_output)
-        # stub_titles = stub.get("titles", supporting_titles)
-        # stub_sentences = stub.get("sentences", HotpotQA_context)
-        # stub_times = stub.get("times_used", item.get("wiki_times", 1))
+        for msg in memory:
+            if msg.role == "tool":
+                for item_content in msg.content:
+                    raw_data = getattr(item_content, "text", "") or getattr(item_content, "result", "")
+                    
+                    # סינון הודעות שגיאה
+                    if "No results were found" in str(raw_data):
+                        continue 
+                    
+                    # ספירת הצלחה
+                    actual_tool_calls_count += 1
+                    
+                    # ניסיון חילוץ description וצמצום למשפט ראשון
+                    try:
+                        data_obj = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
+                        if isinstance(data_obj, list) and len(data_obj) > 0:
+                            desc = data_obj[0].get("description", "")
+                            if desc:
+                                first_sentence = desc.split('.')[0] + "."
+                                if first_sentence not in agent_supporting_sentences:
+                                    agent_supporting_sentences.append(first_sentence)
+                        elif isinstance(raw_data, str) and len(raw_data) > 50:
+                            first_sentence = raw_data.split('.')[0] + "."
+                            if first_sentence not in agent_supporting_sentences:
+                                agent_supporting_sentences.append(first_sentence)
+                    except: 
+                        pass
 
-        # actual_output = json.dumps({
-        #     "answer": stub_answer,
-        #     "tool_used": [
-        #         {
-        #             "tool": "Wikipedia",
-        #             "times_used": stub_times,
-        #             "titles": stub_titles,
-        #         }
-        #     ],
-        #     "supporting_titles": stub_titles,
-        #     "supporting_sentences": stub_sentences,
-        #     "reasoning_explanation": [
-        #         {
-        #             "step": 1,
-        #             "logic": f"Wikipedia shows evidence related to: {stub_answer}."
-        #         }
-        #     ],
-        # })
-        # agent_tool_usage_times = {"Wikipedia": stub_times}
+        # הכנת נתוני הכלים עבור ה-Metric
+        agent_tool_usage_dict = {"Wikipedia": actual_tool_calls_count}
+        agent_tools_list = [ToolCall(name="Wikipedia") for _ in range(actual_tool_calls_count)]
 
-
-
-
-        # Parse the agent JSON output to fill fields
+        # --- שינוי 3: חילוץ תשובה סופית מה-JSON של הסוכן ---
         try:
             agent_response_json = json.loads(actual_output)
         except (json.JSONDecodeError, TypeError):
@@ -520,35 +521,9 @@ async def create_rag_test_cases(num_rows: int = 50):
             or agent_response_json.get("final_answer")
             or actual_output
         )
-        agent_supporting_sentences = agent_response_json.get("supporting_sentences", [])
-        agent_supporting_titles = agent_response_json.get("supporting_titles", []) or agent_response_json.get(
-            "wikipedia_titles_used", []
-        )
 
-        tool_used_field = agent_response_json.get("tool_used", [])
-        agent_tools_used = []
+    
 
-        if isinstance(tool_used_field, str):
-            agent_tools_used.append(ToolCall(name=tool_used_field, input_parameters={}))
-        elif isinstance(tool_used_field, list):
-            for entry in tool_used_field:
-                tool_name = entry.get("tool") if isinstance(entry, dict) else None
-                times_used = entry.get("times_used", 1) if isinstance(entry, dict) else 1
-                titles = entry.get("titles", []) if isinstance(entry, dict) else []
-                if tool_name:
-                    agent_tools_used.append(
-                        ToolCall(
-                            name=tool_name,
-                            input_parameters={"titles": titles} if titles else {},
-                        )
-                    )
-                    # prefer explicit times_used if provided
-                    if times_used:
-                        agent_tool_usage_times[tool_name] = times_used
-        # If parsing failed to yield tool calls, fall back to counted usage
-        if not agent_tools_used and agent_tool_usage_times:
-            for tool_name, times_used in agent_tool_usage_times.items():
-                agent_tools_used.append(ToolCall(name=tool_name, input_parameters={}))
                 
         
         test_case = LLMTestCase(
@@ -557,28 +532,28 @@ async def create_rag_test_cases(num_rows: int = 50):
             expected_output=HotpotQA_expected_output,                
             retrieval_context=agent_supporting_sentences,  
             context= HotpotQA_context,
-            tools_called= agent_tools_used,
+            tools_called= agent_tools_list,
             expected_tools= HotpotQA_tools_used,
             additional_metadata={
                 "expected_facts": HotpotQA_context,
-                "tool_usage":  agent_tool_usage_times,
+                "tool_usage":  agent_tool_usage_dict,
                 "expected_tool_usage": HotpotQA_expected_tools,
                 "supporting_titles": supporting_titles, 
             }
             
         )
 
-        # Debug logging for each constructed test case
+        # עדכון ה-Prints לדיבאג
         print("----- TEST CASE -----")
         print(f"Question: {question}")
         print(f"Expected answer: {HotpotQA_expected_output}")
         print(f"Actual answer: {agent_final_answer}")
         print(f"Expected tools: {HotpotQA_expected_tools}")
-        print(f"Actual tools: {agent_tool_usage_times}")
+        print(f"Actual tools: {agent_tool_usage_dict}") # עודכן
         print(f"Expected facts: {HotpotQA_context}")
         print(f"Actual facts: {agent_supporting_sentences}")
         print(f"Expected tools detail: {HotpotQA_tools_used}")
-        print(f"Actual tools detail: {agent_tools_used}")
+        print(f"Actual tools detail: {agent_tools_list}") # עודכן
         print("---------------------")
 
         test_cases.append(test_case)
