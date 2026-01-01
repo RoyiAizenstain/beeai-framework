@@ -11,6 +11,10 @@ from pathlib import Path
 from collections import Counter
 from typing import List
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # --- Logger Configuration ---
 def setup_logger():
     logger = logging.getLogger("DeepEvalAgentExample")
@@ -384,7 +388,8 @@ async def create_agent() -> RequirementAgent:
             "1. SOURCE ADHERENCE (NO HALLUCINATION): Your final answer MUST be based ONLY on the context you retrieve from the provided tools (VectorStoreSearchTool or WikipediaTool). Do not use external knowledge.",
             "2. MULTI-HOP: You must perform multi-step reasoning or use multiple tools/retrievals if the question requires it.",
             "3. FINAL FORMAT: Your ONLY final output MUST be a single, valid JSON object adhering strictly to the required keys: answer, tool_used, supporting_titles, supporting_sentences, reasoning_explanation. The final_answer must be concise and specific (e.g., just 'Delhi', not a full sentence). Do not include any text outside the JSON block.",
-            "4. THE JSON SCHEMA STRING: " + JSON_SCHEMA_STRING
+            "4. ALWAYS RESPOND WITH JSON",
+            "5. THE RESPONSE JSON SCHEMA: " + JSON_SCHEMA_STRING
         ],
 
     )
@@ -512,7 +517,8 @@ async def create_rag_test_cases(num_rows: int = 50):
 
         # --- שינוי 3: חילוץ תשובה סופית מה-JSON של הסוכן ---
         try:
-            agent_response_json = json.loads(actual_output)
+            loaded_data = json.loads(actual_output)
+            agent_response_json = loaded_data if isinstance(loaded_data, dict) else {}
         except (json.JSONDecodeError, TypeError):
             agent_response_json = {}
 
@@ -571,7 +577,7 @@ async def test_rag() -> None:
     eval_model_name = os.environ.get("EVAL_CHAT_MODEL_NAME", "ollama:llama3.1:8b")
 
     # Increase DeepEval per-task timeout for local models (in seconds)
-    os.environ.setdefault("DEEPEVAL_PER_TASK_TIMEOUT_SECONDS_OVERRIDE", "300")
+    os.environ.setdefault("DEEPEVAL_PER_TASK_TIMEOUT_SECONDS_OVERRIDE", "900")
 
 
     eval_model = DeepEvalLLM.from_name(eval_model_name)
