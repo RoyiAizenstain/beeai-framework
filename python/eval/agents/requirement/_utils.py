@@ -1,7 +1,8 @@
 # Copyright 2025 © BeeAI a Series of LF Projects, LLC
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, TypeVar
+from collections import Counter
+from typing import Any, List, TypeVar
 
 from deepeval.test_case import ConversationalTestCase, LLMTestCase, ToolCall, Turn
 from pydantic import BaseModel
@@ -71,3 +72,6 @@ def to_conversation_test_case(agent: RequirementAgent, turns: list[Turn]) -> Con
             "agent_name": agent.meta.name,
         },
     )
+
+
+from eval._utils import EvaluationTable, print_evaluation_table

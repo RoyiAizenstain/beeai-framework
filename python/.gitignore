@@ -170,6 +170,13 @@ examples/playground
 
 # Evaluation
 .deepeval
+.deepeval/
 .deepeval-cache.json
 .deepeval_telemetry.txt
 eval/**/*.cache
+
+eval/agents/requirement/data_set_new50.py
+eval/agents/requirement/data_set_new2.py
+eval/agents/requirement/evaluation_dataset_2_clean.json
+eval/agents/requirement/offline_wiki_agent.py
+
