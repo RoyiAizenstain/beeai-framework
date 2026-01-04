@@ -352,9 +352,13 @@ async def create_agent() -> RequirementAgent:
     # Use local Ollama without relying on environment variables
     # Allow overriding the agent model; default aligns with eval model naming
     model_name = os.environ.get("AGENT_CHAT_MODEL_NAME", os.environ.get("EVAL_CHAT_MODEL_NAME", "ollama:llama3.1:8b"))
+
     llm = ChatModel.from_name(
         model_name,
-        {"allow_parallel_tool_calls": True},
+        {
+            "allow_parallel_tool_calls": True,
+            "tool_choice_support": set(), # <--- השורה הזו מונעת את הקריסה!
+        },
     )
 
     # Create RequirementAgent with multiple tools
@@ -571,7 +575,7 @@ async def test_rag() -> None:
     eval_model_name = os.environ.get("EVAL_CHAT_MODEL_NAME", "ollama:llama3.1:8b")
 
     # Increase DeepEval per-task timeout for local models (in seconds)
-    os.environ.setdefault("DEEPEVAL_PER_TASK_TIMEOUT_SECONDS_OVERRIDE", "300")
+    os.environ.setdefault("DEEPEVAL_PER_TASK_TIMEOUT_SECONDS_OVERRIDE", "1000")
 
 
     eval_model = DeepEvalLLM.from_name(eval_model_name)
@@ -643,6 +647,8 @@ async def test_rag() -> None:
     ]
 
     # Evaluate using DeepEval incrementally
+    pkl_path = Path(__file__).parent / "eval_results_raw.pkl"
+
     all_test_results = []
     for i, test_case in enumerate(test_cases):
         logger.info(f"Evaluating test case {i+1}/{len(test_cases)}...")
@@ -666,18 +672,20 @@ async def test_rag() -> None:
             )
             all_test_results.extend(step_results)
             
-            # Pickle the accumulated results after each test case
-            try:
-                raw_path = Path("eval_results_raw.pkl")
-                with raw_path.open("wb") as f:
-                    pickle.dump(all_test_results, f)
-                logger.info(f"Test case {i+1} saved to {raw_path}")
-            except Exception as pickle_exc:
-                logger.error(f"Failed to pickle after test case {i+1}: {pickle_exc}")
                 
         except Exception as eval_exc:
             logger.error(f"Error evaluating test case {i+1}: {eval_exc}")
             traceback.print_exc()
+
+                    # Pickle the accumulated results after each test case
+        finally:
+            if all_test_results:
+                try:
+                    with open(pkl_path, "wb") as f:
+                        pickle.dump(all_test_results, f)
+                    logger.info(f"Progress saved to {pkl_path} (Total results: {len(all_test_results)})")
+                except Exception as p_err:
+                    logger.error(f"Critical: Could not write PKL file: {p_err}")
 
     # Build and print the evaluation results table
     table = create_evaluation_table(all_test_results, metrics)
