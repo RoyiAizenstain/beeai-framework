@@ -9,7 +9,7 @@ import tempfile
 import traceback
 from pathlib import Path
 from collections import Counter
-from typing import List
+from typing import Any, List
 
 # --- Logger Configuration ---
 def setup_logger():
@@ -95,6 +95,8 @@ from eval._utils import (
 # --- Environment Setup ---
 load_dotenv()
 
+test_cases_num = 50
+
 class FactsSimilarityMetric(BaseMetric):
     # Default so DeepEval's MetricData.success sees a proper boolean
     success: bool = False
@@ -113,36 +115,38 @@ class FactsSimilarityMetric(BaseMetric):
         metadata = getattr(test_case, "additional_metadata", None) or {}
         return metadata.get("expected_facts", [])
 
-    async def a_measure(
-        self,
-        test_case: LLMTestCase,
-        _show_indicator: bool = True,
-        _in_component: bool = False,
-        _log_metric_to_confident: bool = True,
-    ) -> float:
-        """Async entrypoint DeepEval actually uses; we ignore the extra flags."""
+    async def a_measure(self, test_case: LLMTestCase) -> float:
         actual_facts = getattr(test_case, "retrieval_context", [])
         expected_facts = self._get_expected(test_case)
+
         if not expected_facts:
-            score = 1.0 if not actual_facts else 0.0
-            self.score = score
-            self.success = score >= self.threshold
-            return score
+            return 1.0 if not actual_facts else 0.0
+        if not actual_facts:
+            self.score = 0.0
+            return 0.0
 
         prompt = (
-            "You are an evaluator.\n"
-            "Compare the two lists of supporting facts.\n\n"
-            f"Actual facts:\n{actual_facts}\n\n"
-            f"Expected facts:\n{expected_facts}\n\n"
-            "Return ONLY a number between 0 and 1 (no text), where:\n"
-            "0 = completely different, 1 = identical in meaning.\n"
+            "Role: Expert Information Auditor\n"
+            "Task: Evaluate the coverage of 'Expected Facts' within the 'Retrieved Context'.\n\n"
+            f"Expected Facts (Ground Truth):\n{expected_facts}\n\n"
+            f"Retrieved Context (Agent Output):\n{actual_facts}\n\n"
+            "Instructions:\n"
+            "1. Break down the Expected Facts into core independent claims.\n"
+            "2. For each claim, check if it is supported by the Retrieved Context.\n"
+            "3. Calculation: (Number of supported claims) / (Total number of expected claims).\n\n"
+            "Final Score: Output ONLY the numerical score between 0.0 and 1.0."
         )
-        text = await self.model.a_generate(prompt)  # uses DeepEvalLLM.a_generate
-        score = float(str(text).strip())
-        score = max(0.0, min(1.0, score))
-        self.score = score
-        self.success = score >= self.threshold
-        return score
+
+        text = await self.model.a_generate(prompt)
+        
+        # חילוץ מספר נקי
+        import re
+        numbers = re.findall(r"[-+]?\d*\.\d+|\d+", str(text))
+        score = float(numbers[0]) if numbers else 0.0
+
+        self.score = max(0.0, min(1.0, score))
+        self.success = self.score >= self.threshold
+        return self.score
 
     def measure(self, test_case: LLMTestCase) -> float:
         """Synchronous wrapper for environments that call measure() instead of a_measure()."""
@@ -172,44 +176,43 @@ class AnswerLLMJudgeMetric(BaseMetric):
         self.threshold = threshold
         self.async_mode = True  # DeepEval will call a_measure
 
-    async def a_measure(
-        self,
-        test_case: LLMTestCase,
-        _show_indicator: bool = True,
-        _in_component: bool = False,
-        _log_metric_to_confident: bool = True,
-    ) -> float:
+    async def a_measure(self, test_case: LLMTestCase) -> float:
         actual = (test_case.actual_output or "").strip()
         expected = (test_case.expected_output or "").strip()
 
-        # If no expected answer, treat as trivial pass/fail
         if not expected:
-            score = 1.0 if not actual else 0.0
-            self.score = score
-            self.success = score >= self.threshold
-            return score
+            return 1.0 if not actual else 0.0
 
         prompt = (
-            "You are an evaluator.\n"
-            "Compare the model's answer to the expected answer.\n\n"
-            f"Question:\n{test_case.input}\n\n"
-            f"Model answer:\n{actual}\n\n"
-            f"Expected answer:\n{expected}\n\n"
-            "Return ONLY a number between 0 and 1 (no text), where:\n"
-            "0 = completely incorrect or unrelated,\n"
-            "1 = fully correct and equivalent in meaning.\n"
+            "You are an expert evaluator. Your goal is to determine if the Model Answer is semantically identical to the Expected Answer.\n\n"
+            f"Question: {test_case.input}\n"
+            f"Expected Answer: {expected}\n"
+            f"Model Answer: {actual}\n\n"
+            "Evaluation Criteria:\n"
+            "1. If the answers share the same core meaning (e.g., 'Messi' vs 'Lionel Messi'), give 1.0.\n"
+            "2. If the answer is partially correct but missing key info, give 0.5.\n"
+            "3. If the answer is wrong or contradicts the expected, give 0.0.\n\n"
+            "Instructions: Provide your reasoning in one sentence, then on a new line provide the score as: 'Score: <number>'"
         )
 
-        text = await self.model.a_generate(prompt)  # DeepEvalLLM async call
+        text = await self.model.a_generate(prompt)
+        
+        # חילוץ הציון מתוך הטקסט (מטפל במקרים שהמודל חופר)
         try:
-            score = float(str(text).strip())
-        except Exception:
+            import re
+            # מחפש מספר אחרי המילה Score
+            match = re.search(r"Score:\s*([\d\.]+)", text)
+            if match:
+                score = float(match.group(1))
+            else:
+                # Fallback למקרה שרק החזיר מספר
+                score = float(str(text).strip())
+        except:
             score = 0.0
 
-        score = max(0.0, min(1.0, score))
-        self.score = score
-        self.success = score >= self.threshold
-        return score
+        self.score = max(0.0, min(1.0, score))
+        self.success = self.score >= self.threshold
+        return self.score
 
     def measure(self, test_case: LLMTestCase) -> float:
         """Sync wrapper in case something calls measure() directly."""
@@ -224,82 +227,57 @@ class AnswerLLMJudgeMetric(BaseMetric):
         return "AnswerLLMJudgeMetric"
 
 class ToolUsageMetric(BaseMetric):
-    """
-    Compares actual tool usage against expected tool usage.
-    expected_tool_usage בדוגמה:
-        {"Wikipedia": 2, "PythonTool": 1}
-    """
-
-    # Default so DeepEval's MetricData.success sees a proper boolean
-    success: bool = False
-
     def __init__(self, threshold: float = 0.5):
         super().__init__()
         self.threshold = threshold
-        self.async_mode = False  # חובה כי אין measure אסינכרוני
-
-    def _get_tool_usage(self, test_case: LLMTestCase, key: str) -> dict[str, int]:
-        if hasattr(test_case, key):
-            return getattr(test_case, key) or {}
-        metadata = getattr(test_case, "additional_metadata", None) or {}
-        return metadata.get(key, {}) or {}
+        self.score = 0.0
+        self.success = False
 
     def measure(self, test_case: LLMTestCase) -> float:
-        actual_tool_usage = self._get_tool_usage(test_case, "tool_usage")
-        expected_tool_usage = self._get_tool_usage(test_case, "expected_tool_usage")
+        # חילוץ הנתונים מה-TestCase
+        expected_tools = getattr(test_case, "expected_tools", []) or \
+                         (test_case.additional_metadata.get("expected_tools_detail") if test_case.additional_metadata else [])
+        
+        actual_tools = getattr(test_case, "tools_called", []) or \
+                       (test_case.additional_metadata.get("actual_tools_detail") if test_case.additional_metadata else [])
+        
+        if not expected_tools:
+            self.score = 1.0 if not actual_tools else 0.0
+            self.success = self.score >= self.threshold
+            return self.score
 
-        all_tools = set(actual_tool_usage.keys()) | set(expected_tool_usage.keys())
-        if not all_tools:
-            score = 1.0
-            self.score = score
-            self.success = score >= self.threshold
-            return score
+        matches = 0
+        used_actual_indices = set()
 
-        # =====================
-        # חלק 1: השוואת כלים קיימים (0.75)
-        # =====================
-        matching_tools = sum(
-            1 for tool in all_tools if tool in actual_tool_usage and tool in expected_tool_usage
-        )
-        existence_score = 0.75 * (matching_tools / len(all_tools))
-
-        # =====================
-        # חלק 2: השוואת כמויות שימוש בכל כלי (0.25)
-        # =====================
-        count_score_per_tool = []
-        for tool in expected_tool_usage:
-            actual_count = actual_tool_usage.get(tool, 0)
-            expected_count = expected_tool_usage[tool]
-            if actual_count == expected_count:
-                count_score_per_tool.append(1.0)
-            else:
-                count_score_per_tool.append(0.0)
-        if count_score_per_tool:
-            count_score = 0.25 * (sum(count_score_per_tool) / len(count_score_per_tool))
-        else:
-            count_score = 0.25  # אין כלים צפוים → נותנים את הציון המלא לחלק זה
-
-        # =====================
-        # ציון סופי
-        # =====================
-        final_score = existence_score + count_score
-        self.score = final_score
-        self.success = final_score >= self.threshold
-        return final_score
-
+        for expected in expected_tools:
+            exp_name = expected.name
+            exp_query = str(expected.input_parameters.get("query", "")).lower()
+            
+            for i, actual in enumerate(actual_tools):
+                if i in used_actual_indices:
+                    continue
+                
+                act_name = actual.name
+                act_query = str(actual.input_parameters.get("query", "")).lower()
+                
+                if exp_name == act_name and exp_query in act_query:
+                    matches += 1
+                    used_actual_indices.add(i)
+                    break
+        
+        self.score = matches / len(expected_tools)
+        self.success = self.score >= self.threshold
+        return self.score
 
     async def a_measure(self, test_case: LLMTestCase) -> float:
         return self.measure(test_case)
 
     def is_successful(self) -> bool:
-        return getattr(self, "success", False)
+        return self.success
 
     @property
     def __name__(self):
         return "ToolUsageMetric"
-
-
-
 
 def count_tool_usage(messages):
     tool_counter = Counter()
@@ -329,7 +307,7 @@ def create_calculator_tool() -> Tool:
     )
     return python_tool
 
-test_cases_num = 50
+
 
 
 async def create_agent() -> RequirementAgent:
@@ -382,13 +360,15 @@ async def create_agent() -> RequirementAgent:
         llm=llm, 
         tools=[wiki_tool,OpenMeteoTool(), calculator_tool],
         memory=UnconstrainedMemory(),
-        role="You are an expert Multi-hop Question Answering (QA) agent. Your primary role is to extract and combine information from the provided context to answer the user's question. Answer in jason format only.",
+        role="You are a precise research assistant. You prioritize finding actual documents over guessing. If you don't find information, state that you couldn't find it in the context.",        
         instructions=[
             "RULES and CONSTRAINTS:",
-            "1. SOURCE ADHERENCE (NO HALLUCINATION): Your final answer MUST be based ONLY on the context you retrieve from the provided tools (VectorStoreSearchTool or WikipediaTool). Do not use external knowledge.",
-            "2. MULTI-HOP: You must perform multi-step reasoning or use multiple tools/retrievals if the question requires it.",
-            "3. FINAL FORMAT: Your ONLY final output MUST be a single, valid JSON object adhering strictly to the required keys: answer, tool_used, supporting_titles, supporting_sentences, reasoning_explanation. The final_answer must be concise and specific (e.g., just 'Delhi', not a full sentence). Do not include any text outside the JSON block.",
-            "4. THE JSON SCHEMA STRING: " + JSON_SCHEMA_STRING
+            "1. SOURCE ADHERENCE (NO HALLUCINATION): Your final answer MUST be based ONLY on the context you retrieve from the provided tools. Do not use external knowledge.",
+            "2. SEARCH STRATEGY: Start with broad searches. If a tool returns 'No results', try again with a simpler query (e.g., just the person's name).",
+            "3. STOP CONDITION: If you find the clear and complete answer in the context of a tool (like Wikipedia), STOP searching immediately and provide the final JSON. Do not use Python or other tools if you already have the answer.",
+            "4. MULTI-HOP: You must perform multi-step reasoning ONLY if the question cannot be answered from a single retrieval.",
+            "5. FINAL FORMAT: Your ONLY final output MUST be a single, valid JSON object adhering strictly to the required keys: answer, tool_used, supporting_titles, supporting_sentences, reasoning_explanation.",
+            "6. THE JSON SCHEMA STRING: " + JSON_SCHEMA_STRING
         ],
 
     )
@@ -437,28 +417,6 @@ async def create_rag_test_cases(num_rows: int = 50):
     # Load only requested number of rows (capped at 50)
     test_data = test_data[:min(num_rows, 50)]
 
-    # Per-question stubbed responses (can diverge from ground truth)
-    # Stubbed responses now mirror the dataset entries exactly
-    # stub_map = {
-    #     "Which magazine was started first Arthur's Magazine or First for Women?": {
-    #         "answer": "Arthur's Magazine",
-    #         "titles": ["Arthur's Magazine", "First for Women"],
-    #         "sentences": [
-    #             "Arthur's Magazine (1844–1846) was an American literary periodical published in Philadelphia in the 19th century.",
-    #             "First for Women is a woman's magazine published by Bauer Media Group in the USA.",
-    #         ],
-    #         "times_used": 2,
-    #     },
-    #     "The Oberoi family is part of a hotel company that has a head office in what city?": {
-    #         "answer": "Delhi",
-    #         "titles": ["Oberoi family", "The Oberoi Group"],
-    #         "sentences": [
-    #             "The Oberoi family is an Indian family that is famous for its involvement in hotels, namely through The Oberoi Group.",
-    #             "The Oberoi Group is a hotel company with its head office in Delhi.",
-    #         ],
-    #         "times_used": 2,
-    #     },
-    # }
 
     for i, item in enumerate(test_data):
         agent = await create_agent()
@@ -479,42 +437,63 @@ async def create_rag_test_cases(num_rows: int = 50):
         memory = state.memory.messages
         actual_output = response.last_message.text
 
+        actual_tool_calls_count = 0
+        agent_tools_list = []
         agent_supporting_sentences = []
-        actual_tool_calls_count = 0 
 
         for msg in memory:
-            if msg.role == "tool":
-                for item_content in msg.content:
-                    raw_data = getattr(item_content, "text", "") or getattr(item_content, "result", "")
+            msg_data = msg.to_json_safe()
+            role = msg_data.get("role")
+            content_list = msg_data.get("content", [])
+
+            # 1. חילוץ ארגומנטים מה-Assistant (מטפל ב-args כ-String)
+            if role == "assistant":
+                for item in content_list:
+                    if item.get("type") == "tool-call" and item.get("tool_name") != "final_answer":
+                        actual_tool_calls_count += 1
+                        tool_name = item.get("tool_name")
+                        
+                        # ה-BeeAI שומר את ה-args כסטרינג, אנחנו צריכים לעשות לו parse
+                        raw_args = item.get("args", "{}")
+                        try:
+                            parsed_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                        except:
+                            parsed_args = {"query": str(raw_args)}
+
+                        agent_tools_list.append(ToolCall(
+                            name=tool_name,
+                            input_parameters=parsed_args
+                        ))
+
+# 2. חילוץ תוצאות מה-Tool (עבור ה-Contextual Recall ו-Facts)
+            elif role == "tool":
+                for item in content_list:
+                    raw_result = item.get("result") or item.get("text", "")
                     
-                    # סינון הודעות שגיאה
-                    if "No results were found" in str(raw_data):
-                        continue 
-                    
-                    # ספירת הצלחה
-                    actual_tool_calls_count += 1
-                    
-                    # ניסיון חילוץ description וצמצום למשפט ראשון
+                    # ניקוי המבנה של BeeAI - חילוץ התיאור בלבד
+                    fact_text = ""
                     try:
-                        data_obj = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
-                        if isinstance(data_obj, list) and len(data_obj) > 0:
-                            desc = data_obj[0].get("description", "")
-                            if desc:
-                                first_sentence = desc.split('.')[0] + "."
-                                if first_sentence not in agent_supporting_sentences:
-                                    agent_supporting_sentences.append(first_sentence)
-                        elif isinstance(raw_data, str) and len(raw_data) > 50:
-                            first_sentence = raw_data.split('.')[0] + "."
-                            if first_sentence not in agent_supporting_sentences:
-                                agent_supporting_sentences.append(first_sentence)
-                    except: 
-                        pass
+                        # אם התוצאה היא מחרוזת של JSON, נהפוך אותה לאובייקט
+                        data = json.loads(raw_result) if isinstance(raw_result, str) else raw_result
+                        
+                        # אם זה רשימת תוצאות (כמו בויקיפדיה), ניקח את התיאור של התוצאה הראשונה
+                        if isinstance(data, list) and len(data) > 0:
+                            fact_text = data[0].get('description', str(data[0]))
+                        else:
+                            fact_text = str(data)
+                    except:
+                        fact_text = str(raw_result)
 
-        # הכנת נתוני הכלים עבור ה-Metric
-        agent_tool_usage_dict = {"Wikipedia": actual_tool_calls_count}
-        agent_tools_list = [ToolCall(name="Wikipedia") for _ in range(actual_tool_calls_count)]
+                    # סינון הודעות שגיאה וטקסט קצר מדי
+                    clean_fact = fact_text.strip()
+                    if clean_fact and "no results" not in clean_fact.lower() and len(clean_fact) > 20:
+                        if clean_fact not in agent_supporting_sentences:
+                            agent_supporting_sentences.append(clean_fact[:500]) # הגבלה ל-500 תווים
 
-        # --- שינוי 3: חילוץ תשובה סופית מה-JSON של הסוכן ---
+        # עדכון המילון הדינמי
+        from collections import Counter
+        agent_tool_usage_dict = dict(Counter([tc.name for tc in agent_tools_list]))
+
         try:
             agent_response_json = json.loads(actual_output)
         except (json.JSONDecodeError, TypeError):
@@ -573,25 +552,11 @@ async def test_rag() -> None:
     test_cases = await create_rag_test_cases(test_cases_num) #number beqtween 1 and 50
     # Use local Ollama model for evaluation by default (no env key required)
     eval_model_name = os.environ.get("EVAL_CHAT_MODEL_NAME", "ollama:llama3.1:8b")
-
     # Increase DeepEval per-task timeout for local models (in seconds)
     os.environ.setdefault("DEEPEVAL_PER_TASK_TIMEOUT_SECONDS_OVERRIDE", "1000")
-
-
     eval_model = DeepEvalLLM.from_name(eval_model_name)
-    # RAG-specific metricszv
-    contextual_relevancy = FaithfulnessMetric(
-        model = eval_model,
-        threshold=0.7
-    )
-    contextual_precision = AnswerRelevancyMetric(
-        model = eval_model,
-        threshold=0.7
-    )
-    tool_correctness_metric = ToolCorrectnessMetric(
-        model=eval_model,
-        include_reason=False,
-    )
+
+
     ######### final answer
     # Metric 1: Ensure the final answer exactly matches the expected answer
     answer_exact_match_metric = ExactMatchMetric(threshold=1.0)
@@ -606,28 +571,20 @@ async def test_rag() -> None:
     # Metric 3: Compare tool usage and count vs expected tool usage and count
     tool_usage_metric = ToolUsageMetric()
 
-    # Metric 4: Compare tool arguments
-    argument_metric = ArgumentCorrectnessMetric(
-        threshold=0.7,
-        model = eval_model,
-        include_reason=True
-    )
 
     ######### supporting facts
-
-    # Metric 5: Compare retrieved supporting sentences with expected facts - llm as a judge
+    # Metric 4: Compare retrieved supporting sentences with expected facts - llm as a judge
     facts_metric = FactsSimilarityMetric(
         model=eval_model
     )    
 
-    # Metric 6: measures how much of the truly relevant context (expected_facts / ground-truth evidence) the retrieved context covers.
+    # RAG-specific metrics
+    # Metric 5: measures how much of the truly relevant context (expected_facts / ground-truth evidence) the retrieved context covers.
     contextual_recall_metric = ContextualRecallMetric(
         model = eval_model,
         threshold=0.7
     )
     
-    
-
     # Collect metrics to run (enable all for full table output)
     # Ordered by category:
     # Final answer metrics first, then tool metrics, then facts/context.
@@ -635,15 +592,12 @@ async def test_rag() -> None:
         # Final answer
         answer_exact_match_metric,
         answer_llm_judge_metric,
-        contextual_precision,
-        contextual_recall_metric,
-        contextual_relevancy,
         # Tools
-        tool_correctness_metric,
         tool_usage_metric,
-        argument_metric,
         # Facts / context
         facts_metric,
+        #RAG
+        contextual_recall_metric,
     ]
 
     # Evaluate using DeepEval incrementally
@@ -670,6 +624,16 @@ async def test_rag() -> None:
                 or getattr(res, "test_results", None)
                 or []
             )
+
+            for result in step_results:
+                print(f"\n--- METRIC SCORES FOR TEST CASE {i} ---")
+                for metric_data in result.metrics_data:
+                    # מדפיס את שם המטריקה, הציון (0.0 עד 1.0) והסיבה (אם יש)
+                    status = "✅" if metric_data.success else "❌"
+                    print(f"{status} {metric_data.name}: {metric_data.score:.2f}")
+                    if metric_data.reason:
+                        print(f"   Reason: {metric_data.reason}")
+                print("---------------------------------------\n")
             all_test_results.extend(step_results)
             
                 
