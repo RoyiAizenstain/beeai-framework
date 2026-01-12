@@ -2,8 +2,8 @@ import pickle
 from pprint import pprint
 
 # החלף את 'file.pkl' בנתיב לקובץ שלך
-# path = r"python\eval\agents\requirement\agent_run_checkpoint.pkl"
-path = r"python\eval\agents\requirement\eval_results_raw.pkl"
+path = r"python\eval\agents\requirement\agent_run_checkpoint.pkl"
+# path = r"python\eval\agents\requirement\eval_results_raw.pkl"
 
 
 try:

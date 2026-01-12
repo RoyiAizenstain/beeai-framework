@@ -85,7 +85,7 @@ from eval._utils import (
     run_agent_with_fail_safe,
 )
 
-test_cases_num = 2
+test_cases_num = 1
 
 # --- DeepEval Custom Metrics ---
 
@@ -319,13 +319,19 @@ async def create_agent() -> RequirementAgent:
         llm=llm, 
         tools=[wiki_tool, OpenMeteoTool(), calculator_tool, ThinkTool()],
         memory=UnconstrainedMemory(),
-        role="You are an expert Multi-hop Question Answering (QA) agent. Your primary role is to query the available data sources, extract relevant information and combine information from the provided context to answer the user's question. Answer in JSON format only.",
+        role="You are an expert Multi-hop Question Answering (QA) agent. Your primary role is to query the available data sources, extract relevant information and combine information from the provided context to answer the user's question. Before searching, use the ThinkTool to plan your search strategy. Answer in JSON format only.",
         instructions=[
             "RULES and CONSTRAINTS:",
-            "1. SOURCE ADHERENCE (NO HALLUCINATION): Your final answer MUST be based ONLY on the context you retrieve from the provided tools. Do not use external knowledge.",
-            "2. Wikipedia tool accepts short terms as the query rather than long queries, e.g. John Doe.",
-            "3. MULTI-HOP: You must perform multi-step reasoning or use multiple tools/retrievals if the question requires it.",
-            "4. ALWAYS RESPOND WITH JSON",
+            "1. SOURCE ADHERENCE: Your final answer MUST be based ONLY on the retrieved context. If you cannot find the answer after multiple search attempts, state clearly what information is missing.",
+            
+            "2. SEARCH STRATEGY: Wikipedia works best with entities (names, places, events). "
+            "If your search returns 'No results', DECOMPOSE the question and search for the main subjects separately. "
+            "Example: Instead of 'widow affected by X decision', search for 'X decision' first.",
+            
+            "3. MULTI-HOP: You must perform as many steps as needed. If one tool call doesn't give the full answer, use the information gained to make a better second tool call.",
+            
+            "4. OUTPUT FORMAT: You must ALWAYS respond in the required JSON format. Never return an empty 'response' field if you found any partial information.",
+            
             "5. THE RESPONSE JSON SCHEMA: " + JSON_SCHEMA_STRING
         ],
     )
