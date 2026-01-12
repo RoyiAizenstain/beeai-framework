@@ -34,7 +34,27 @@ class DeepEvalLLM(DeepEvalBaseLLM):
 
     # pyrefly: ignore [bad-override]
     def generate(self, prompt: str, schema: BaseModel | None = None) -> str:
-        raise NotImplementedError()
+        """
+        Synchronous generate for DeepEval metrics that do not support async.
+        Note: This may fail if called from an already running event loop.
+        """
+        import asyncio
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            # If we are in an event loop, we can't use asyncio.run.
+            # This is a known limitation when combining sync DeepEval metrics with an async environment.
+            # Most modern DeepEval metrics use a_measure/a_generate.
+            raise RuntimeError(
+                "DeepEvalLLM.generate() called from a running event loop. "
+                "Please use the async version (a_generate) or ensure the metric supports async_mode=True."
+            )
+
+        return asyncio.run(self.a_generate(prompt, schema))
 
     # pyrefly: ignore [bad-override]
     async def a_generate(self, prompt: str, schema: TSchema | None = None) -> str:

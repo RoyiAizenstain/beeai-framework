@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import logging
 import os
+import pickle
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import List, TypeVar
+from typing import Any, List, TypeVar
 
 import pytest
 from deepeval import evaluate
@@ -22,11 +24,102 @@ from rich.table import Table
 
 from beeai_framework.agents import AnyAgent
 
+logger = logging.getLogger(__name__)
+
 ROOT_CACHE_DIR = f"{os.path.dirname(os.path.abspath(__file__))}/.cache"
 Path(ROOT_CACHE_DIR).mkdir(parents=True, exist_ok=True)
 
 
 T = TypeVar("T", bound=AnyAgent)
+TInput = TypeVar("TInput")
+TResponse = TypeVar("TResponse")
+
+
+async def run_agent_with_fail_safe(
+    inputs: List[TInput],
+    agent_factory: Callable[[], T | Awaitable[T]],
+    run_fn: Callable[[T, TInput], Awaitable[TResponse]],
+    temp_file: str | Path | None = None,
+    reinstantiate: bool = False,
+    max_retries: int = 3,
+) -> List[TResponse]:
+    """
+    Executes an agent on a list of inputs with checkpointing and retry logic.
+    """
+    if temp_file is None:
+        temp_file = Path(ROOT_CACHE_DIR) / "agent_run_checkpoint.pkl"
+    else:
+        temp_file = Path(temp_file)
+
+    results: List[TResponse | None] = [None] * len(inputs)
+    start_idx = 0
+
+    if temp_file.exists():
+        try:
+            with open(temp_file, "rb") as f:
+                checkpoint_data = pickle.load(f)
+                if isinstance(checkpoint_data, list) and len(checkpoint_data) == len(inputs):
+                    results = checkpoint_data
+                    # Find the first None to resume from there
+                    try:
+                        start_idx = results.index(None)
+                    except ValueError:
+                        start_idx = len(results)
+                    logger.info(f"Resuming from checkpoint at index {start_idx}")
+        except Exception as e:
+            logger.error(f"Failed to load checkpoint: {e}. Starting from scratch.")
+
+    agent = None
+    if not reinstantiate:
+        try:
+            agent_res = agent_factory()
+            agent = await agent_res if asyncio.iscoroutine(agent_res) else agent_res
+        except Exception as e:
+            logger.error(f"Failed to initialize agent: {e}")
+            raise
+
+    for i in range(start_idx, len(inputs)):
+        input_item = inputs[i]
+        success = False
+        last_error = None
+
+        for attempt in range(max_retries):
+            try:
+                if reinstantiate:
+                    agent_res = agent_factory()
+                    agent = await agent_res if asyncio.iscoroutine(agent_res) else agent_res
+
+                # run_fn is expected to handle the execution
+                response = await run_fn(agent, input_item)
+                results[i] = response
+                success = True
+                break
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Error on test case {i + 1}, attempt {attempt + 1}: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2**attempt)  # Brief pause before retry
+
+        if not success:
+            logger.error(f"Failed test case {i + 1} after {max_retries} attempts. Last error: {last_error}")
+            # We still keep it as None in results and save progress
+
+        # Save checkpoint after each case
+        try:
+            temp_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(temp_file, "wb") as f:
+                pickle.dump(results, f)
+        except Exception as e:
+            logger.warning(f"Warning: Failed to save checkpoint: {e}")
+
+    # Final cleanup: delete temp file if all succeeded
+    # if all(res is not None for res in results) and temp_file.exists():
+    #     try:
+    #         temp_file.unlink()
+    #     except Exception as e:
+    #         logger.warning(f"Warning: Failed to delete checkpoint file: {e}")
+
+    return results
 
 
 async def create_dataset(
@@ -56,9 +149,8 @@ async def create_dataset(
                 retrieval_context_key_name="retrieval_context",
             )
     else:
-
-        async def process_golden(golden: Golden) -> LLMTestCase:
-            agent = agent_factory()
+        # Refactored to use run_agent_with_fail_safe for resilience
+        async def process_golden_helper(agent: T, golden: Golden) -> LLMTestCase:
             case = LLMTestCase(
                 input=golden.input,
                 expected_tools=golden.expected_tools,
@@ -73,8 +165,18 @@ async def create_dataset(
             await agent_run(agent, case)
             return case
 
-        for test_case in await asyncio.gather(*[process_golden(golden) for golden in goldens], return_exceptions=False):
-            dataset.add_test_case(test_case)
+        cache_file = cache_dir / "dataset_creation_checkpoint.pkl"
+        test_cases = await run_agent_with_fail_safe(
+            inputs=goldens,
+            agent_factory=agent_factory,
+            run_fn=process_golden_helper,
+            temp_file=cache_file,
+            reinstantiate=False,  # Reinstantiation controlled by caller's preference or default
+            max_retries=3,
+        )
+
+        for case in test_cases:
+            dataset.add_test_case(case)
 
         if cache:
             dataset.save_as(file_type="json", directory=str(cache_dir.absolute()), include_test_cases=True)
