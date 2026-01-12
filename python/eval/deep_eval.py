@@ -18,6 +18,10 @@ from beeai_framework.backend.message import UserMessage
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.utils import ModelLike
 
+from rich.console import Console, Group
+from rich.panel import Panel
+from rich.table import Table
+
 TSchema = TypeVar("TSchema", bound=BaseModel)
 
 
@@ -132,5 +136,60 @@ def create_evaluation_table(eval_results, metrics: List[BaseMetric]) -> Evaluati
         
     return EvaluationTable(metric_names=metric_names, rows=rows)
 
+
+def print_detailed_report(eval_results) -> None:
+    """
+    Prints a detailed report for each test case, including inputs, 
+    actual outputs, and the specific reasoning for each metric score.
+    """
+    console = Console()
     
+    # Handle different possible formats of eval_results
+    results = getattr(eval_results, "test_results", []) or getattr(eval_results, "results", [])
+    if isinstance(eval_results, list):
+        results = eval_results
+
+    if not results:
+        console.print("[bold red]No execution results found to display.[/bold red]")
+        return
+
+    console.print("\n[bold cyan]🔍 Detailed Test Case Execution Report[/bold cyan]\n")
+
+    for i, res in enumerate(results):
+        # 1. המרת נתוני הקלט והפלט לטבלה נקייה
+        info_table = Table(show_header=False, box=None, padding=(0, 1))
+        info_table.add_row("[bold yellow]Input:[/bold yellow]", str(res.input))
+        
+        # הדגשת מצב שבו הפלט ריק (הבעיה שהייתה לך קודם)
+        actual_out = str(res.actual_output).strip()
+        display_out = f"[white]{actual_out}[/white]" if actual_out else "[bold italic red]EMPTY OUTPUT[/bold italic red]"
+        
+        info_table.add_row("[bold green]Actual Output:[/bold green]", display_out)
+        info_table.add_row("[bold blue]Expected Output:[/bold blue]", str(res.expected_output))
+
+        # 2. בניית טבלת המטריקות והנימוקים
+        metrics_table = Table(show_header=True, header_style="bold magenta", box=None)
+        metrics_table.add_column("Metric", style="cyan")
+        metrics_table.add_column("Score", justify="center")
+        metrics_table.add_column("Status", justify="center")
+        metrics_table.add_column("Reasoning (LLM Judge)", style="dim", width=60)
+
+        for md in (res.metrics_data or []):
+            status = "[green]PASS[/green]" if md.success else "[red]FAIL[/red]"
+            metrics_table.add_row(
+                str(md.name),
+                f"{md.score:.2f}",
+                status,
+                str(md.reason or "No explanation provided.")
+            )
+
+        # 3. הדפסה בתוך פאנל מופרד לכל מקרה בדיקה
+        console.print(
+            Panel(
+                Group(info_table, "\n[bold underline]Metrics Breakdown:[/bold underline]", metrics_table),
+                title=f"[bold white]Test Case #{i+1}[/bold white]",
+                border_style="bright_blue",
+                padding=(1, 2)
+            )
+        )
     

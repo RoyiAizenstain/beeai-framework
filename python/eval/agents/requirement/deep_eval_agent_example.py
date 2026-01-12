@@ -78,13 +78,14 @@ from beeai_framework.tools.think import ThinkTool
 from eval.deep_eval import (
     DeepEvalLLM,
     create_evaluation_table,
+    print_detailed_report,
 )
 from eval._utils import (
     print_evaluation_table,
     run_agent_with_fail_safe,
 )
 
-test_cases_num = 1
+test_cases_num = 2
 
 # --- DeepEval Custom Metrics ---
 
@@ -533,6 +534,7 @@ async def test_rag() -> None:
     all_test_results = await run_evaluation(test_cases, metrics)
     table = create_evaluation_table(all_test_results, metrics)
     print_evaluation_table(table)
+    print_detailed_report(all_test_results)
 
 if __name__ == "__main__":
     asyncio.run(test_rag())
