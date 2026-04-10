@@ -21,9 +21,3 @@ class BaseAgentStackExtensions(TypedDict, total=True):
     trajectory: Annotated[
         agentstack_extensions.TrajectoryExtensionServer, agentstack_extensions.TrajectoryExtensionSpec()
     ]
-    error_ext: Annotated[
-        agentstack_extensions.ErrorExtensionServer,
-        agentstack_extensions.ErrorExtensionSpec(
-            params=agentstack_extensions.ErrorExtensionParams(include_stacktrace=True)
-        ),
-    ]

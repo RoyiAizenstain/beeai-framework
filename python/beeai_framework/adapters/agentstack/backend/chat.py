@@ -212,7 +212,7 @@ class AgentStackChatModel(ChatModel):
             parameters=self.parameters.model_copy(deep=True),
         )
         cloned._modified_attributes = self._modified_attributes.copy()
-        cloned.middlewares.extend(self.middlewares)
+        self.middlewares.extend(self.middlewares)
         return cloned
 
 

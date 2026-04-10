@@ -8,7 +8,7 @@ import * as path from "node:path";
 import os from "node:os";
 import { GroqChatModel } from "beeai-framework/adapters/groq/backend/chat";
 
-const llm = new GroqChatModel("openai/gpt-oss-20b");
+const llm = new GroqChatModel("llama-3.3-70b-versatile");
 
 const sqlTool = new SQLTool({
   provider: "sqlite",

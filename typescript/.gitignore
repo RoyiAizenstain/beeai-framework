@@ -133,6 +133,3 @@ dist
 .idea
 .npmrc
 .DS_Store
-
-# Local playground
-examples/playground

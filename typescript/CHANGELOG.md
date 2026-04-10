@@ -1,41 +1,5 @@
 # Changelog
 
-## [0.1.28](https://github.com/i-am-bee/beeai-framework/compare/typescript_v0.1.27...typescript_v0.1.28) (2026-03-24)
-
-### Features
-
-- update deps ([f9d9a2b](https://github.com/i-am-bee/beeai-framework/commit/f9d9a2b984a9a6f64bc7f4b36c9fc32ac8285b63))
-
-## [0.1.27](https://github.com/i-am-bee/beeai-framework/compare/typescript_v0.1.26...typescript_v0.1.27) (2026-02-11)
-
-### Features
-
-- **backend:** set finish reason for manual tool calls ([fa0f5f4](https://github.com/i-am-bee/beeai-framework/commit/fa0f5f43f107744c9e795244d755e1c7557a111a))
-- upgrade VercelAI SDK, improve error recovery ([#1402](https://github.com/i-am-bee/beeai-framework/issues/1402)) ([85bb9bb](https://github.com/i-am-bee/beeai-framework/commit/85bb9bb554348c33e78b8fe27033dea2dce12ece))
-
-## [0.1.26](https://github.com/i-am-bee/beeai-framework/compare/typescript_v0.1.25...typescript_v0.1.26) (2026-01-22)
-
-### Features
-
-- handle empty chunks (watsonx) and invalid responses ([#1391](https://github.com/i-am-bee/beeai-framework/issues/1391)) ([2beeca9](https://github.com/i-am-bee/beeai-framework/commit/2beeca9e98a5f014e8efe50aba207523c46ad7cf))
-
-## [0.1.25](https://github.com/i-am-bee/beeai-framework/compare/typescript_v0.1.24...typescript_v0.1.25) (2026-01-20)
-
-### Features
-
-- auto recover from malformed tool calls and empty responses ([#1388](https://github.com/i-am-bee/beeai-framework/issues/1388)) ([f721e41](https://github.com/i-am-bee/beeai-framework/commit/f721e4129cf0dd4918fa523834411189fdbca72c))
-
-## [0.1.24](https://github.com/i-am-bee/beeai-framework/compare/typescript_v0.1.23...typescript_v0.1.24) (2026-01-15)
-
-### Features
-
-- add middlewares to ChatModel class ([c654aa5](https://github.com/i-am-bee/beeai-framework/commit/c654aa5b0c847908f43ff00f6e69048c48442b7b))
-- **middlewares:** add isEmpty helper to StreamToolCall ([ac818ff](https://github.com/i-am-bee/beeai-framework/commit/ac818ff4b680e3a7457bf257dc20086a7f3e0a72))
-
-### Bug Fixes
-
-- **adapters:** infer missing tool call id for watsonx chat model tool… ([#1387](https://github.com/i-am-bee/beeai-framework/issues/1387)) ([93fc139](https://github.com/i-am-bee/beeai-framework/commit/93fc13958fe8a474cf49bc1178a0e26b5a1bc80b)), closes [#1386](https://github.com/i-am-bee/beeai-framework/issues/1386)
-
 ## [0.1.23](https://github.com/i-am-bee/beeai-framework/compare/typescript_v0.1.22...typescript_v0.1.23) (2025-12-22)
 
 ### Features

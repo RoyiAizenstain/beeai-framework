@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import AsyncIterator
-from uuid import UUID
 
 try:
     import a2a.types as a2a_types
@@ -22,9 +21,6 @@ class DummyContextStoreInstance(agentstack_context_store.ContextStoreInstance):
             yield
 
     async def store(self, data: a2a_types.Message | a2a_types.Artifact) -> None:
-        pass
-
-    async def delete_history_from_id(self, from_id: UUID) -> None:
         pass
 
 

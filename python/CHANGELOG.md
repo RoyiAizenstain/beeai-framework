@@ -1,25 +1,3 @@
-## python_v0.1.79 (2026-03-24)
-
-- update dependencies
-
-## python_v0.1.78 (2026-02-26)
-
-- update dependencies
-
-## python_v0.1.77 (2026-02-11)
-
-### Features
-
-- extend VectorStore parameters
-- update agentstack-sdk (#1405)
-
-## python_v0.1.76 (2026-01-20)
-
-### Features
-
-- **backend**: auto recover from malformed tool calls and empty responses (#1388)
-- **adapters**: add Agent Stack RAG capabilities (AgentStackVectorStore, AgentstackEmbeddingModel) (#1384)
-
 ## python_v0.1.75 (2026-01-08)
 
 ### Bug Fixes

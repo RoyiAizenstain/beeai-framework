@@ -22,8 +22,6 @@ const excludePattern = process.env.EXCLUDE_PATTERN || ``;
 
 const exclude: string[] = [
   "examples/workflows/contentCreator.ts",
-  "examples/workflows/multiAgents.ts",
-  "examples/workflows/multiAgentsSimple.ts",
   "examples/workflows/competitive-analysis/**/*.ts",
   "examples/agents/experimental/remote.ts",
   "examples/agents/providers/*.ts",

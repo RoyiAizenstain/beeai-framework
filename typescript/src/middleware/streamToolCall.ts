@@ -95,30 +95,11 @@ export class StreamToolCallMiddleware<T = any> extends Middleware<RunInstance> {
     });
   }
 
-  reset() {
+  bind(ctx: RunContext<RunInstance>): void {
+    // Reset state
     this.output = new ChatModelOutput([]);
     this.buffer = "";
     this.delta = "";
-  }
-
-  async add(chunk: ChatModelOutput) {
-    await this.handleNewToken(
-      {
-        value: chunk,
-        callbacks: {
-          abort: () => {},
-        },
-      },
-      {} as EventMeta,
-    );
-  }
-
-  isEmpty() {
-    return this.buffer.length === 0;
-  }
-
-  bind(ctx: RunContext<RunInstance>): void {
-    this.reset();
 
     // Listen to ChatModel start event
     this.cleanups.push(

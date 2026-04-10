@@ -1,5 +1,6 @@
 # Copyright 2025 © BeeAI a Series of LF Projects, LLC
 # SPDX-License-Identifier: Apache-2.0
+import uuid
 from collections.abc import AsyncGenerator
 from typing import Annotated, Any, Unpack, cast
 
@@ -82,20 +83,19 @@ def _react_agent_factory(
             metadata=message.metadata,
             # pyrefly: ignore [bad-argument-type]
             llm=extra_extensions.get("llm_ext"),
-            # pyrefly: ignore [bad-argument-type]
-            embedding=extra_extensions.get("embedding"),
             extra_extensions=extra_extensions,  # type: ignore[arg-type]
         ) as stack_context:
-            stream = False
+            artifact_id = uuid.uuid4()
+            append = False
 
             @cloned_agent.emitter.on("partial_update")
             async def on_partial_update(data: ReActAgentUpdateEvent, _: EventMeta) -> None:
-                nonlocal stream
+                nonlocal append
                 if data.update.key == "final_answer":
                     update = data.update.value
                     update = update.get_text_content() if hasattr(update, "get_text_content") else str(update)
-                    await context.yield_async(update)
-                    stream = True
+                    await _send_final_answer_update(context, artifact_id, update, append=append)
+                    append = True
 
             @cloned_agent.emitter.on("update")
             async def on_update(data: ReActAgentUpdateEvent, _: EventMeta) -> None:
@@ -115,7 +115,9 @@ def _react_agent_factory(
                 await context.store(message)
                 await context.store(agent_response)
 
-            if not stream:
+            if append:
+                await _send_final_answer_update(context, artifact_id, last_chunk=True)
+            else:
                 yield agent_response
 
     return agentstack_agent.agent(**agent_metadata)(run)
@@ -151,8 +153,6 @@ def _tool_calling_agent_factory(
             metadata=message.metadata,
             # pyrefly: ignore [bad-argument-type]
             llm=extra_extensions.get("llm_ext"),
-            # pyrefly: ignore [bad-argument-type]
-            embedding=extra_extensions.get("embedding"),
             extra_extensions=extra_extensions,  # type: ignore[arg-type]
         ) as stack_context:
             result = await cloned_agent.run([convert_a2a_to_framework_message(message)]).middleware(
@@ -199,17 +199,16 @@ def _requirement_agent_factory(
             metadata=message.metadata,
             # pyrefly: ignore [bad-argument-type]
             llm=extra_extensions.get("llm_ext"),
-            # pyrefly: ignore [bad-argument-type]
-            embedding=extra_extensions.get("embedding"),
             extra_extensions=extra_extensions,  # type: ignore[arg-type]
         ) as stack_context:
-            stream = False
+            artifact_id = uuid.uuid4()
+            append = False
 
             @cloned_agent.emitter.on("final_answer")
             async def on_final_answer(data: RequirementAgentFinalAnswerEvent, _: EventMeta) -> None:
-                nonlocal stream
-                await context.yield_async(data.delta)
-                stream = True
+                nonlocal append
+                await _send_final_answer_update(context, artifact_id, data.delta, append=append)
+                append = True
 
             result = await cloned_agent.run([convert_a2a_to_framework_message(message)]).middleware(
                 create_tool_trajectory_middleware(stack_context)
@@ -220,10 +219,35 @@ def _requirement_agent_factory(
                 await context.store(message)
                 await context.store(agent_response)
 
-            if not stream:
+            if append:
+                await _send_final_answer_update(context, artifact_id, last_chunk=True)
+            else:
                 yield agent_response
 
     return agentstack_agent.agent(**agent_metadata)(run)
+
+
+async def _send_final_answer_update(
+    context: agentstack_context.RunContext,
+    artifact_id: uuid.UUID,
+    update: str = "",
+    *,
+    append: bool = True,
+    last_chunk: bool = False,
+) -> None:
+    await context.yield_async(
+        a2a_types.TaskArtifactUpdateEvent(
+            append=append,
+            context_id=context.context_id,
+            task_id=context.task_id,
+            last_chunk=last_chunk,
+            artifact=a2a_types.Artifact(
+                name="final_answer",
+                artifact_id=str(artifact_id),
+                parts=[a2a_types.Part(root=a2a_types.TextPart(text=update))],
+            ),
+        )
+    )
 
 
 def _runnable_factory(
@@ -256,8 +280,6 @@ def _runnable_factory(
             metadata=message.metadata,
             # pyrefly: ignore [bad-argument-type]
             llm=extra_extensions.get("llm_ext"),
-            # pyrefly: ignore [bad-argument-type]
-            embedding=extra_extensions.get("embedding"),
             extra_extensions=extra_extensions,  # type: ignore[arg-type]
         ):
             # pyrefly: ignore [missing-attribute]
