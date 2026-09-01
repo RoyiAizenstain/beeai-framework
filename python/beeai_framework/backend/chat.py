@@ -1,9 +1,8 @@
 # Copyright 2025 © BeeAI a Series of LF Projects, LLC
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
 import contextlib
+import functools
 import logging
 from abc import abstractmethod
 from collections.abc import AsyncGenerator, Callable
@@ -196,12 +195,12 @@ class ChatModelOptions(RunnableOptions, total=False):
 
     temperature: float | None
     """
-    Model paramater that controls the randomness of the generated text.
+    Model parameter that controls the randomness of the generated text.
     """
 
     top_p: float | None
     """
-    Model parameter (nucleous sampling) that decides how many possible words to consider.
+    Model parameter (nucleus sampling) that decides how many possible words to consider.
     """
 
     top_k: int | None
@@ -229,13 +228,25 @@ class ChatModelOptions(RunnableOptions, total=False):
     Generated chunks will be streamed without validation of the produced tool calls.
     """
 
+    reasoning_effort: str | None
+    """
+    Controls the amount of reasoning effort for models that support it (e.g., "low", "medium", "high").
+    """
+
     fallback_tool: AnyTool | None
     """
     Tool to invoke when the model makes a malformed tool call (for example, when it forgets the name of a tool).
     """
 
 
-_ChatModelKwargsAdapter = TypeAdapter(ChatModelKwargs)
+@functools.cache
+def _get_chat_model_kwargs_adapter() -> TypeAdapter[ChatModelKwargs]:
+    return TypeAdapter(ChatModelKwargs)
+
+
+class ChatModelResponseConfig(BaseModel):
+    force_tool_call_via_response_format: bool = False
+    response_format_schema: type[BaseModel] | None = None
 
 
 class ChatModel(Runnable[ChatModelOutput]):
@@ -352,7 +363,7 @@ class ChatModel(Runnable[ChatModelOutput]):
         self._settings = kwargs.get("settings", {})
         self._settings.update(**exclude_non_annotated(kwargs, ChatModelKwargs))
 
-        kwargs = _ChatModelKwargsAdapter.validate_python(kwargs)
+        kwargs = _get_chat_model_kwargs_adapter().validate_python(kwargs)
 
         parameters = type(self).get_default_parameters()
         update_model(parameters, sources=[kwargs.get("parameters")])
@@ -559,6 +570,7 @@ class ChatModel(Runnable[ChatModelOutput]):
                             {"tempMessage": True},
                         )
                     )
+                    await cache_entry.delete()
                 elif self.retry_on_empty_response and isinstance(e, EmptyChatModelResponseError):
                     model_input.messages = model_input.messages.copy()
                     model_input.messages.append(AssistantMessage("", {"tempMessage": True}))
@@ -738,7 +750,7 @@ class ChatModel(Runnable[ChatModelOutput]):
         options: ModelLike[ChatModelParameters] | None = None,
         /,
         **kwargs: Any,
-    ) -> ChatModel:
+    ) -> "ChatModel":
         """Create a ChatModel instance from a provider and model name.
 
         This factory method allows you to instantiate a chat model by specifying
@@ -943,8 +955,3 @@ def _raise_tool_choice_error(
         generated_error=message,
         response=output,
     )
-
-
-class ChatModelResponseConfig(BaseModel):
-    force_tool_call_via_response_format: bool = False
-    response_format_schema: type[BaseModel] | None = None
