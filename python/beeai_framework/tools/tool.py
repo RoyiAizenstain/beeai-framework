@@ -3,7 +3,6 @@
 
 import contextlib
 import inspect
-import logging
 import typing
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -43,6 +42,7 @@ class Tool(Generic[TInput, TRunOptions, TOutput], ABC):
     Base class for all tools in the BeeAI framework.
     Handles tool initialization, input validation, execution, and caching.
     """
+
     def __init__(self, options: dict[str, Any] | None = None) -> None:
         self._options: dict[str, Any] | None = options or None
         self._cache = self.options.get("cache", NullCache[TOutput]()) if self.options else NullCache[TOutput]()
@@ -191,7 +191,7 @@ class Tool(Generic[TInput, TRunOptions, TOutput], ABC):
 
     async def clone(self) -> Self:
         if type(self).clone == Tool.clone:
-            logging.warning(f"Tool '{self.name}' does not implement the 'clone' method.")
+            logger.warning(f"Tool '{self.name}' does not implement the 'clone' method.")
 
         return self
 
@@ -264,6 +264,7 @@ def tool(
     """
     Decorator to easily create a Tool instance from a standard Python function.
     """
+
     def create_tool(fn: TFunction) -> AnyTool:
         tool_name = name or fn.__name__
         tool_description = description or inspect.getdoc(fn)

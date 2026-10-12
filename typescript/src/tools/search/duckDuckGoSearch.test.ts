@@ -10,13 +10,13 @@ import {
 } from "@/tools/search/duckDuckGoSearch.js";
 import { beforeEach, expect, vi } from "vitest";
 
-import * as ddg from "duck-duck-scrape";
+import * as ddg from "ddg-kit";
 import { Tool } from "@/tools/base.js";
 import { Task } from "promise-based-task";
 
 import { SlidingCache } from "@/cache/slidingCache.js";
 import { verifyDeserialization } from "@tests/e2e/utils.js";
-vi.mock("duck-duck-scrape");
+vi.mock("ddg-kit");
 
 describe("DuckDuckGoSearch Tool", () => {
   beforeEach(() => {
@@ -103,7 +103,9 @@ describe("DuckDuckGoSearch Tool", () => {
     );
     await tool.cache!.set("B", Task.resolve(new DuckDuckGoSearchToolOutput([])));
     const serialized = await tool.serialize();
-    const deserialized = await DuckDuckGoSearchTool.fromSerialized(serialized);
+    const deserialized = await DuckDuckGoSearchTool.fromSerialized(serialized, {
+      allowFunctionDeserialization: true,
+    });
     expect(await tool.cache.get("A")).toStrictEqual(await deserialized.cache.get("A"));
     verifyDeserialization(tool, deserialized);
   });
